@@ -6,7 +6,6 @@ set -euo pipefail
 # - Editable repo list: ~/.config/ghostty/wallpaper_repos.txt
 # - Random repo & image selection
 # - Writes ~/.config/ghostty/wallpaper.conf and reloads Ghostty if running
-# - --daemon mode with INTERVAL_SEC (default 3600)
 # ============================================================
 
 # --------- Paths
@@ -176,20 +175,6 @@ run_once() {
   reload_ghostty_if_running
 }
 
-# --------- Daemon mode
-daemon_mode() {
-  log "Starting daemon (interval: ${INTERVAL_SEC}s)."
-  while true; do
-    if run_once; then
-      log "Next update in ${INTERVAL_SEC}s."
-      sleep "$INTERVAL_SEC"
-    else
-      log "Cycle error: retrying in 300s."
-      sleep 300
-    fi
-  done
-}
-
 # --------- Repo list utilities
 cmd_list() {
   ensure_repo_list_exists
@@ -229,7 +214,6 @@ show_help() {
   cat <<EOF
 Usage:
   $0                # one-off: pick repo+image and reload Ghostty if running
-  $0 --daemon       # infinite loop (uses INTERVAL_SEC, default 3600s)
   $0 --list         # show repo list
   $0 --add "name|owner/repo|branch|path"
   $0 --remove <name>
@@ -241,13 +225,11 @@ Files:
   - Temp images: $TEMP_DIR
 Tips:
   - Set GITHUB_TOKEN to avoid GitHub rate-limits.
-  - Change daemon interval: export INTERVAL_SEC=900
 EOF
 }
 
 # --------- Arg parsing
 case "${1:-}" in
-  --daemon) daemon_mode ;;
   --list)   cmd_list ;;
   --add)    shift; cmd_add "${1:-}" ;;
   --remove) shift; cmd_remove "${1:-}" ;;
