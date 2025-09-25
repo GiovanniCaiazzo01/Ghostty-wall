@@ -4,7 +4,7 @@
 # ghostty-wall
 
 A tiny macOS-only tool that sets a random wallpaper for [Ghostty](https://github.com/ghostty-org/ghostty) by picking an image from a list of GitHub repositories.
-It can run once on demand or loop in the background as a daemon, and it auto-wires your Ghostty config on first run.
+It can run once on demand, and it auto-wires your Ghostty config on first run.
 
 > **Scope:** Ghostty only. The script is tailored to Ghostty’s config and reload behavior and does not target other terminals.
 
@@ -119,7 +119,6 @@ If the installer falls back to `~/.local/bin`, it will append that directory to 
 
 ```bash
 ghostty-wall                 # one-off: pick repo+image and reload Ghostty if running
-ghostty-wall --daemon        # infinite loop (uses INTERVAL_SEC, default 3600s)
 ghostty-wall --list          # show the repo list file
 ghostty-wall --add "name|owner/repo|branch|path"
 ghostty-wall --remove <name>
@@ -145,14 +144,6 @@ List current repositories:
 ```bash
 ghostty-wall --list
 ```
-
-Run as a daemon every 15 minutes:
-
-```bash
-export INTERVAL_SEC=900
-ghostty-wall --daemon
-```
-
 ---
 
 ## ⚙️ Configuration
@@ -196,7 +187,6 @@ k1ngwalls|k1ng440/Wallpapers|master|wallpapers
 
 ## 🌍 Environment Variables
 
-* `INTERVAL_SEC` — interval for daemon mode (default: `3600`)
 * `GITHUB_TOKEN` — optional; if set, the script adds an Authorization header to avoid GitHub API rate limits
 
   ```bash
@@ -327,8 +317,4 @@ ghostty-wall --add "mycats|myuser/mycats|main|images/wallpapers"
 
 # 4) Rotate now
 ghostty-wall
-
-# 5) Run forever every 15 minutes
-export INTERVAL_SEC=900
-ghostty-wall --daemon
 ```
