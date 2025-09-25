@@ -4,7 +4,7 @@
 # ghostty-wall
 
 A tiny macOS-only tool that sets a random wallpaper for [Ghostty](https://github.com/ghostty-org/ghostty) by picking an image from a list of GitHub repositories.
-It can run once on demand, and it auto-wires your Ghostty config on first run.
+It can run once on demand and it auto-wires your Ghostty config on first run.
 
 > **Scope:** Ghostty only. The script is tailored to Ghostty’s config and reload behavior and does not target other terminals.
 
