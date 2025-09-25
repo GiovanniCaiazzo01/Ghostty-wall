@@ -84,8 +84,6 @@ ghostty-wall/
 ├─ scripts/
 │  ├─ install.sh
 │  └─ uninstall.sh
-├─ launchd/
-│  └─ com.ghostty.wallpaper.plist
 ├─ examples/
 │  └─ wallpaper_repos.example.txt
 ├─ README.md
@@ -190,42 +188,6 @@ k1ngwalls|k1ng440/Wallpapers|master|wallpapers
 ```
 
 **Supported image extensions:** `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp` (case-insensitive)
-
----
-
-## 🔁 Launch at Login (optional)
-
-To have wallpapers rotate automatically:
-
-1. Edit `launchd/com.ghostty.wallpaper.plist` so `ProgramArguments[0]` matches your install path:
-
-   * `/usr/local/bin/ghostty-wall` (default in the sample)
-   * or `/opt/homebrew/bin/ghostty-wall` on Apple Silicon if your Homebrew lives there
-
-2. (Optional) Adjust environment variables in the plist:
-
-   * `INTERVAL_SEC` (seconds between updates)
-   * Optionally set `GITHUB_TOKEN`
-
-3. Load the LaunchAgent:
-
-```bash
-mkdir -p ~/Library/LaunchAgents
-cp launchd/com.ghostty.wallpaper.plist ~/Library/LaunchAgents/
-launchctl unload ~/Library/LaunchAgents/com.ghostty.wallpaper.plist 2>/dev/null || true
-launchctl load  ~/Library/LaunchAgents/com.ghostty.wallpaper.plist
-launchctl start com.ghostty.wallpaper
-```
-
-Stop/Unload:
-
-```bash
-launchctl stop  com.ghostty.wallpaper
-launchctl unload ~/Library/LaunchAgents/com.ghostty.wallpaper.plist
-```
-
-**Logs:**
-Stdout/err go to `/tmp/ghostty-wall.out.log` and `/tmp/ghostty-wall.err.log` (as defined in the plist).
 
 ---
 
