@@ -96,7 +96,6 @@ fetch_images_from_repo() {
     log "Failed to contact GitHub for $API_URL"; return 1
   fi
 
-  IMAGES=[]
   IMAGES=()
   while IFS= read -r name; do
     IMAGES+=("$name")
