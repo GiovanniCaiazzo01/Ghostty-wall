@@ -1,0 +1,6 @@
+# List of image sources (one per line):
+# name|owner/repo|branch|path
+# Examples:
+# name|owner/repo|branch|path
+wallpapers|SingularisArt/wallpapers|master|
+

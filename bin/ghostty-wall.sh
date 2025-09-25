@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# Ghostty wallpaper picker (macOS, Bash 3.2-friendly)
+# - Editable repo list: ~/.config/ghostty/wallpaper_repos.txt
+# - Random repo & image selection
+# - Writes ~/.config/ghostty/wallpaper.conf and reloads Ghostty if running
+# - --daemon mode with INTERVAL_SEC (default 3600)
+# ============================================================
+
+# --------- Paths
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+GHOSTTY_DIR="$CONF_DIR/ghostty"
+WALL_CONF="$GHOSTTY_DIR/wallpaper.conf"
+MAIN_CONF="$GHOSTTY_DIR/config"
+REPO_LIST_FILE="$GHOSTTY_DIR/wallpaper_repos.txt"
+TEMP_DIR="/tmp/anime_wallpapers"
+INTERVAL_SEC="${INTERVAL_SEC:-3600}"
+
+mkdir -p "$GHOSTTY_DIR" "$TEMP_DIR"
+
+log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+# --------- Repo list: create file if missing (EXACTLY 4 fields)
+ensure_repo_list_exists() {
+  if [ ! -f "$REPO_LIST_FILE" ]; then
+    cat >"$REPO_LIST_FILE" <<'EOF'
+# name|owner/repo|branch|path
+anime|ThePrimeagen/anime|master|
+# Extra example:
+# k1ngwalls|k1ng440/Wallpapers|master|wallpapers
+EOF
+    log "Created $REPO_LIST_FILE (edit it to add/remove repos)."
+  fi
+}
+
+# --------- Load only valid lines (4 fields)
+load_repo_lines() {
+  awk -F'|' '
+    /^[[:space:]]*#/ { next }        # comments
+    /^[[:space:]]*$/ { next }        # empty
+    NF==4 {
+      # trim whitespace on each field
+      for (i=1;i<=NF;i++){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i) }
+      print $0
+    }
+  ' "$REPO_LIST_FILE" 2>/dev/null || true
+}
+
+# --------- Pick a random repo (no mapfile needed)
+choose_random_repo() {
+  local line
+  local -a LINES=()
+  while IFS= read -r line; do
+    LINES+=("$line")
+  done < <(load_repo_lines)
+
+  if [ "${#LINES[@]}" -eq 0 ]; then
+    log "No valid repos in $REPO_LIST_FILE"; exit 1
+  fi
+
+  local idx=$((RANDOM % ${#LINES[@]}))
+  IFS='|' read -r REPO_NAME OWNER_REPO BRANCH SUBPATH <<<"${LINES[$idx]}"
+
+  [ -n "${BRANCH:-}" ] || BRANCH="main"
+  SUBPATH="${SUBPATH:-}"
+  SUBPATH="${SUBPATH#/}"; SUBPATH="${SUBPATH%/}"  # normalize path
+
+  log "Selected repo: ${REPO_NAME:-$OWNER_REPO} (branch: $BRANCH path: ${SUBPATH:-/})"
+}
+
+# --------- Build API and RAW URLs for GitHub
+build_repo_urls() {
+  local api="https://api.github.com/repos/$OWNER_REPO/contents"
+  [ -n "$SUBPATH" ] && api="$api/$SUBPATH"
+  API_URL="$api?ref=$BRANCH"
+
+  RAW_BASE="https://raw.githubusercontent.com/$OWNER_REPO/$BRANCH"
+  [ -n "$SUBPATH" ] && RAW_BASE="$RAW_BASE/$SUBPATH"
+}
+
+# --------- Fetch image list from the selected repo
+fetch_images_from_repo() {
+  log "Fetching image list from GitHub..."
+
+  # Headers: always set User-Agent; if GITHUB_TOKEN is set, add auth to avoid rate limit
+  local -a headers
+  headers=(-H "User-Agent: ghostty-wall")
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    headers+=(-H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
+  fi
+
+  local json
+  if ! json=$(curl -fsSL "${headers[@]}" "$API_URL"); then
+    log "Failed to contact GitHub for $API_URL"; return 1
+  fi
+
+  IMAGES=[]
+  IMAGES=()
+  while IFS= read -r name; do
+    IMAGES+=("$name")
+  done < <(printf '%s\n' "$json" \
+      | grep -oE '"name"\s*:\s*"[^"]+"' \
+      | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/' \
+      | grep -iE '\.(jpe?g|png|gif|webp)$' || true)
+
+  if [ "${#IMAGES[@]}" -eq 0 ]; then
+    log "No images found in $OWNER_REPO/${SUBPATH:-}@${BRANCH}"; return 1
+  fi
+  log "Found ${#IMAGES[@]} images."
+}
+
+# --------- Pick a random image and download it
+pick_and_download_image() {
+  local idx=$((RANDOM % ${#IMAGES[@]}))
+  local sel="${IMAGES[$idx]}"
+  local url="$RAW_BASE/$sel"
+  local ext="${sel##*.}"
+  CURRENT_IMAGE="$TEMP_DIR/current_wallpaper.$ext"
+
+  log "Selected image: $sel"
+  log "Downloading: $url"
+  if ! curl -fsSL "$url" -o "$CURRENT_IMAGE"; then
+    log "Failed to download image"; return 1
+  fi
+  log "Image ready: $CURRENT_IMAGE"
+}
+
+# --------- Write mini-config and ensure include in main Ghostty config
+write_wall_conf_and_include() {
+  cat >"$WALL_CONF" <<EOF
+background-image=$CURRENT_IMAGE
+background-image-fit=cover
+background-image-position=center
+background-image-opacity=0.1
+EOF
+
+  [ -f "$MAIN_CONF" ] || touch "$MAIN_CONF"
+  if ! grep -qsF "config-file = $WALL_CONF" "$MAIN_CONF"; then
+    printf '\nconfig-file = %s\n' "$WALL_CONF" >> "$MAIN_CONF"
+    log "Added include to Ghostty main config."
+  fi
+}
+
+# --------- Reload Ghostty if running (macOS) — NOTE: OSA must start at column 0
+reload_ghostty_if_running() {
+  case "$(uname)" in
+    Darwin)
+      # Detect if Ghostty (stable or nightly) is running via System Events
+      if /usr/bin/osascript -e '
+        tell application "System Events"
+          set pn to name of processes
+          return (pn contains "Ghostty") or (pn contains "Ghostty Nightly")
+        end tell' | grep -qi true; then
+        log "Reloading Ghostty config (⌘⇧,)..."
+        /usr/bin/osascript <<'OSA' 2>/dev/null || true
+tell application "Ghostty" to activate
+tell application "System Events" to keystroke "," using {command down, shift down}
+OSA
+      else
+        log "Ghostty is not running: it will use the new wallpaper on next launch."
+      fi
+      ;;
+    *) log "Automatic reload is only supported on macOS." ;;
+  esac
+}
+
+# --------- Single run
+run_once() {
+  ensure_repo_list_exists
+  choose_random_repo
+  build_repo_urls
+  fetch_images_from_repo
+  pick_and_download_image
+  write_wall_conf_and_include
+  reload_ghostty_if_running
+}
+
+# --------- Daemon mode
+daemon_mode() {
+  log "Starting daemon (interval: ${INTERVAL_SEC}s)."
+  while true; do
+    if run_once; then
+      log "Next update in ${INTERVAL_SEC}s."
+      sleep "$INTERVAL_SEC"
+    else
+      log "Cycle error: retrying in 300s."
+      sleep 300
+    fi
+  done
+}
+
+# --------- Repo list utilities
+cmd_list() {
+  ensure_repo_list_exists
+  echo "=== $REPO_LIST_FILE ==="
+  cat "$REPO_LIST_FILE"
+}
+cmd_add() {
+  ensure_repo_list_exists
+  local line="${1:-}"
+  if [ -z "$line" ]; then
+    echo "Usage: $0 --add 'name|owner/repo|branch|path'"; exit 1
+  fi
+  # simple validation: 4 fields
+  if [ "$(echo "$line" | awk -F'|' '{print NF}')" -ne 4 ]; then
+    echo "Invalid line: must have 4 '|' separated fields"; exit 1
+  fi
+  local name="${line%%|*}"
+  local tmp; tmp="$(mktemp)"
+  grep -vE "^${name}\|" "$REPO_LIST_FILE" >"$tmp" 2>/dev/null || true
+  mv "$tmp" "$REPO_LIST_FILE"
+  echo "$line" >>"$REPO_LIST_FILE"
+  log "Added/updated repo: $line"
+}
+cmd_remove() {
+  ensure_repo_list_exists
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    echo "Usage: $0 --remove <name>"; exit 1
+  fi
+  local tmp; tmp="$(mktemp)"
+  grep -vE "^${name}\|" "$REPO_LIST_FILE" >"$tmp" 2>/dev/null || true
+  mv "$tmp" "$REPO_LIST_FILE"
+  log "Removed (if present) repo: $name"
+}
+
+show_help() {
+  cat <<EOF
+Usage:
+  $0                # one-off: pick repo+image and reload Ghostty if running
+  $0 --daemon       # infinite loop (uses INTERVAL_SEC, default 3600s)
+  $0 --list         # show repo list
+  $0 --add "name|owner/repo|branch|path"
+  $0 --remove <name>
+  $0 --help
+
+Files:
+  - Repo list: $REPO_LIST_FILE
+  - Ghostty config: $WALL_CONF (included in $MAIN_CONF)
+  - Temp images: $TEMP_DIR
+Tips:
+  - Set GITHUB_TOKEN to avoid GitHub rate-limits.
+  - Change daemon interval: export INTERVAL_SEC=900
+EOF
+}
+
+# --------- Arg parsing
+case "${1:-}" in
+  --daemon) daemon_mode ;;
+  --list)   cmd_list ;;
+  --add)    shift; cmd_add "${1:-}" ;;
+  --remove) shift; cmd_remove "${1:-}" ;;
+  --help|-h|"") [ "${1:-}" = "" ] && run_once || show_help ;;
+  *) show_help ;;
+esac
+
