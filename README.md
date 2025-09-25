@@ -1,3 +1,6 @@
+<img width="720" height="720" alt="ghostty-wall" src="https://github.com/user-attachments/assets/ec3d60f0-bf60-49fb-a417-34c87f14adf5" />
+
+
 # ghostty-wall
 
 A tiny macOS-only tool that sets a random wallpaper for [Ghostty](https://github.com/ghostty-org/ghostty) by picking an image from a list of GitHub repositories.
