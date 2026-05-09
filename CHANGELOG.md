@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [0.2.1]
+
+### Changed
+- Updated the Integration GitHub Actions workflow to `actions/checkout@v5`.
+
+### Documentation
+- Aligned the changelog and release history after publishing `v0.2.0`.
+
 ## [0.2.0]
 
 ### Changed
