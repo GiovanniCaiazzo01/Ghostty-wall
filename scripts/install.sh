@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=mac/install-mac.sh
 source "$SCRIPT_DIR/mac/install-mac.sh"
 # shellcheck source=linux/install-linux.sh
