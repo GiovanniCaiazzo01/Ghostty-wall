@@ -75,6 +75,25 @@ This will:
 * Attempt to reload Ghostty automatically if it's open on macOS
 * You’ll see log messages in your terminal
 
+## 🏷️ GitHub Releases
+
+For now, releases are source-only.
+
+1. Open the latest release on GitHub and download the source archive (`.zip` or `.tar.gz`).
+2. Extract it locally.
+3. Run from the extracted project root:
+
+```bash
+./scripts/install.sh
+```
+
+Notes:
+
+* Release assets do not currently include prebuilt binaries.
+* The normal CI workflow currently runs on Ubuntu only.
+* macOS support is still validated manually before releases.
+* Ongoing release history lives in [`CHANGELOG.md`](./CHANGELOG.md).
+
 ---
 
 ## 🧩 Repository Layout
@@ -88,7 +107,8 @@ ghostty-wall/
 ├─ bin/
 │  └─ ghostty-wall
 ├─ docs/
-│  └─ release-checklist.md
+│  ├─ release-checklist.md
+│  └─ release-notes-template.md
 ├─ scripts/
 │  ├─ install.sh
 │  ├─ integration-test.sh
@@ -100,6 +120,7 @@ ghostty-wall/
 │     └─ install-mac.sh
 ├─ examples/
 │  └─ wallpaper_repos.example.txt
+├─ CHANGELOG.md
 ├─ README.md
 ├─ LICENSE
 └─ .gitignore
@@ -144,7 +165,7 @@ ghostty-wall --help
 1. Run `bash scripts/test.sh` for deterministic local and CI coverage.
 2. Run `bash scripts/integration-test.sh` to verify the live GitHub API and image download path.
 3. Trigger the `Integration` workflow in GitHub Actions when you want the live integration test on a clean runner.
-4. Follow `docs/release-checklist.md` before a release to cover Linux, macOS, and real Ghostty behavior.
+4. Follow `docs/release-checklist.md` before a release to cover Ubuntu CI, manual macOS validation, and real Ghostty behavior.
 
 **Examples**
 
@@ -318,7 +339,7 @@ MIT — see [`LICENSE`](./LICENSE).
 
 ## 🧾 Changelog
 
-* **v0.1.0** - Initial public release (CLI, installer, GitHub repo picker)
+See [`CHANGELOG.md`](./CHANGELOG.md) for project history and [`docs/release-notes-template.md`](./docs/release-notes-template.md) for the GitHub Release notes template.
 
 ---
 
