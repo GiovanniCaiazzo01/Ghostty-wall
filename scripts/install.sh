@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source-path=SCRIPTDIR
 # shellcheck source=mac/install-mac.sh
 source "$SCRIPT_DIR/mac/install-mac.sh"
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=linux/install-linux.sh
 source "$SCRIPT_DIR/linux/install-linux.sh"
 

@@ -9,6 +9,10 @@ fail() {
   exit 1
 }
 
+mktemp_dir() {
+  mktemp -d 2>/dev/null || mktemp -d -t ghostty-wall
+}
+
 assert_file() {
   [ -f "$1" ] || fail "expected file: $1"
 }
@@ -58,7 +62,7 @@ run_syntax_checks() {
 run_cli_tests() {
   local temp_home temp_config list_output help_output list_file invalid_output
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   list_file="$temp_home/list.out"
   mkdir -p "$temp_config"
@@ -126,7 +130,7 @@ run_cli_tests() {
 run_runtime_tests() {
   local temp_home temp_config temp_dir curl_mock output state_file
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl.sh"
@@ -208,7 +212,7 @@ EOF
 run_failure_runtime_tests() {
   local temp_home temp_config temp_dir curl_mock output state_file
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl-fail.sh"
@@ -272,7 +276,7 @@ EOF
 run_api_error_tests() {
   local temp_home temp_config temp_dir curl_mock output
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl-api-error.sh"
@@ -334,7 +338,7 @@ EOF
 run_download_failure_test() {
   local temp_home temp_config temp_dir curl_mock output
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl-download-fail.sh"
@@ -403,7 +407,7 @@ EOF
 run_macos_reload_tests() {
   local temp_home temp_config temp_dir curl_mock osascript_mock output osascript_log
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl.sh"
@@ -507,7 +511,7 @@ EOF
 run_missing_command_test() {
   local temp_home temp_config output
 
-  temp_home="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   mkdir -p "$temp_config/ghostty"
   printf '%s\n' 'repo|owner/repo|main|' > "$temp_config/ghostty/wallpaper_repos.txt"
@@ -525,8 +529,8 @@ run_missing_command_test() {
 run_installer_tests() {
   local temp_home temp_prefix temp_local_prefix temp_config profile_file output curl_fail curl_success temp_home_zsh temp_config_zsh temp_success_home temp_success_config temp_success_prefix
 
-  temp_home="$(mktemp -d)"
-  temp_prefix="$(mktemp -d)"
+  temp_home="$(mktemp_dir)"
+  temp_prefix="$(mktemp_dir)"
   temp_local_prefix="$temp_home/.local"
   temp_config="$temp_home/config"
   profile_file="$temp_home/profile"
@@ -561,9 +565,9 @@ EOF
   assert_output_contains "$output" "Warning: initial wallpaper setup did not complete"
   assert_contains "$temp_config/ghostty/wallpaper_repos.txt" "keep|owner/repo|main|"
 
-  temp_success_home="$(mktemp -d)"
+  temp_success_home="$(mktemp_dir)"
   temp_success_config="$temp_success_home/config"
-  temp_success_prefix="$(mktemp -d)"
+  temp_success_prefix="$(mktemp_dir)"
   mkdir -p "$temp_success_config"
   curl_success="$temp_success_home/curl-success.sh"
   cat >"$curl_success" <<'EOF'
@@ -626,7 +630,7 @@ EOF
     bash "$REPO_ROOT/scripts/install.sh"
   assert_occurrences "$profile_file" "export PATH=\"\$HOME/.local/bin:\$PATH\"" 1
 
-  temp_home_zsh="$(mktemp -d)"
+  temp_home_zsh="$(mktemp_dir)"
   temp_config_zsh="$temp_home_zsh/config"
   mkdir -p "$temp_config_zsh"
   HOME="$temp_home_zsh" \
