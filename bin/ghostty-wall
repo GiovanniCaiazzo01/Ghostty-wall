@@ -25,6 +25,10 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+mktemp_file() {
+  mktemp 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ghostty-wall.XXXXXX"
+}
+
 urlencode_path() {
   local input="$1"
   local encoded=""
@@ -176,7 +180,7 @@ fetch_images_from_repo() {
     headers+=(-H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
   fi
 
-  json_file="$(mktemp)"
+  json_file="$(mktemp_file)"
   if ! http_code=$(curl_fetch_api "$json_file" "${headers[@]}" "$API_URL"); then
     rm -f "$json_file"
     log "Failed to contact GitHub for $API_URL"
@@ -346,7 +350,7 @@ cmd_add() {
   fi
 
   name="${line%%|*}"
-  tmp="$(mktemp)"
+  tmp="$(mktemp_file)"
   write_repo_file_without_name "$name" "$REPO_LIST_FILE" "$tmp"
   mv "$tmp" "$REPO_LIST_FILE"
   printf '%s\n' "$line" >> "$REPO_LIST_FILE"
@@ -368,7 +372,7 @@ cmd_remove() {
     exit 1
   fi
 
-  tmp="$(mktemp)"
+  tmp="$(mktemp_file)"
   write_repo_file_without_name "$name" "$REPO_LIST_FILE" "$tmp"
   mv "$tmp" "$REPO_LIST_FILE"
   log "Removed (if present) repo: $name"
