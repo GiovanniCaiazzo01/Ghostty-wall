@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Changed
 - Improved shell script linting and CI shellcheck coverage.
 - Improved shell portability across Linux and macOS for regex and `mktemp` usage.
