@@ -23,9 +23,13 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
+mktemp_dir() {
+  mktemp -d 2>/dev/null || mktemp -d -t ghostty-wall
+}
+
 require_command curl
 
-temp_home="$(mktemp -d)"
+temp_home="$(mktemp_dir)"
 temp_config="$temp_home/config"
 temp_dir="$temp_home/tmp"
 mkdir -p "$temp_config/ghostty" "$temp_dir"
