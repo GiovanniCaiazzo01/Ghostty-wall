@@ -207,8 +207,8 @@ fetch_images_from_repo() {
   while IFS= read -r url; do
     IMAGE_URLS+=("$url")
   done < <(printf '%s\n' "$json" \
-    | grep -oE '"download_url"\s*:\s*"[^"]+"' \
-    | sed -E 's/.*"download_url"\s*:\s*"([^"]+)".*/\1/' \
+    | grep -oE '"download_url"[[:space:]]*:[[:space:]]*"[^"]+"' \
+    | sed -E 's/.*"download_url"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
     | grep -iE '\.(jpe?g|png|gif|webp)$' || true)
 
   if [ "${#IMAGE_URLS[@]}" -eq 0 ]; then
