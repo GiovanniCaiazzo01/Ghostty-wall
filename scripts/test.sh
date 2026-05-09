@@ -272,7 +272,6 @@ EOF
 run_api_error_tests() {
   local temp_home temp_config temp_dir curl_mock output
 
-  local output_file
   temp_home="$(mktemp -d)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
@@ -625,7 +624,7 @@ EOF
   PATH="/usr/bin:/bin" \
   GHOSTTY_WALL_DISABLE_FIRST_RUN=1 \
     bash "$REPO_ROOT/scripts/install.sh"
-  assert_occurrences "$profile_file" 'export PATH="$HOME/.local/bin:$PATH"' 1
+  assert_occurrences "$profile_file" "export PATH=\"\$HOME/.local/bin:\$PATH\"" 1
 
   temp_home_zsh="$(mktemp -d)"
   temp_config_zsh="$temp_home_zsh/config"
@@ -638,7 +637,7 @@ EOF
   GHOSTTY_WALL_DISABLE_FIRST_RUN=1 \
     bash "$REPO_ROOT/scripts/install.sh"
   assert_file "$temp_home_zsh/.zshrc"
-  assert_occurrences "$temp_home_zsh/.zshrc" 'export PATH="$HOME/.local/bin:$PATH"' 1
+  assert_occurrences "$temp_home_zsh/.zshrc" "export PATH=\"\$HOME/.local/bin:\$PATH\"" 1
 
   HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" INSTALL_PREFIX="$temp_prefix" bash "$REPO_ROOT/scripts/uninstall.sh"
   [ ! -e "$temp_prefix/bin/ghostty-wall" ] || fail "expected uninstall to remove installed binary"

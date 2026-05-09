@@ -1,5 +1,6 @@
+# shellcheck shell=bash
 install_linux() {
-  local prefix bin_dest conf_dir ghostty_dir profile first_run_status shell_name
+  local prefix bin_dest conf_dir ghostty_dir profile first_run_status
 
   printf 'Starting Linux installation...\n'
 
@@ -49,9 +50,9 @@ install_linux() {
 
     if ! printf '%s' ":${PATH:-}:" | grep -qF ":$HOME/.local/bin:"; then
       touch "$profile"
-      if ! grep -qsF 'export PATH="$HOME/.local/bin:$PATH"' "$profile"; then
+      if ! grep -qsF "export PATH=\"\$HOME/.local/bin:\$PATH\"" "$profile"; then
         printf '>> Adding ~/.local/bin to PATH in %s\n' "$profile"
-        printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' >> "$profile"
+        printf '%s\n' "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$profile"
       fi
       printf ">> Re-open your terminal or run 'source %s'\n" "$profile"
     fi
