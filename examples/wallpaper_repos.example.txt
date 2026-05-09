@@ -2,5 +2,4 @@
 # name|owner/repo|branch|path
 # Examples:
 # name|owner/repo|branch|path
-wallpapers|SingularisArt/wallpapers|master|
-
+anime|ThePrimeagen/anime|master|

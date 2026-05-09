@@ -2,27 +2,90 @@
 set -euo pipefail
 
 # ============================================================
-# Ghostty wallpaper picker (macOS, Bash 3.2-friendly)
+# Ghostty wallpaper picker (macOS and Linux, Bash 3.2-friendly)
 # - Editable repo list: ~/.config/ghostty/wallpaper_repos.txt
-# - Random repo & image selection
+# - Random repo & image selection with fallback across repos
 # - Writes ~/.config/ghostty/wallpaper.conf and reloads Ghostty if running
 # ============================================================
 
-# --------- Paths
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
 GHOSTTY_DIR="$CONF_DIR/ghostty"
 WALL_CONF="$GHOSTTY_DIR/wallpaper.conf"
 MAIN_CONF="$GHOSTTY_DIR/config"
 REPO_LIST_FILE="$GHOSTTY_DIR/wallpaper_repos.txt"
-TEMP_DIR="/tmp/anime_wallpapers"
-INTERVAL_SEC="${INTERVAL_SEC:-3600}"
-
-mkdir -p "$GHOSTTY_DIR" "$TEMP_DIR"
+TEMP_DIR="${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}"
+CURL_BIN="${CURL_BIN:-curl}"
+OS_TYPE="${GHOSTTY_WALL_OS_TYPE:-$(uname)}"
+OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+die() { log "$*"; exit 1; }
 
-# --------- Repo list: create file if missing (EXACTLY 4 fields)
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+mktemp_file() {
+  mktemp 2>/dev/null || mktemp "${TMPDIR:-/tmp}/ghostty-wall.XXXXXX"
+}
+
+urlencode_path() {
+  local input="$1"
+  local encoded=""
+  local i char hex
+
+  for ((i = 0; i < ${#input}; i++)); do
+    char="${input:i:1}"
+    case "$char" in
+      [a-zA-Z0-9.~_-]|/) encoded+="$char" ;;
+      *)
+        printf -v hex '%%%02X' "'$char"
+        encoded+="$hex"
+        ;;
+    esac
+  done
+
+  printf '%s' "$encoded"
+}
+
+urlencode_value() {
+  local input="$1"
+  local encoded=""
+  local i char hex
+
+  for ((i = 0; i < ${#input}; i++)); do
+    char="${input:i:1}"
+    case "$char" in
+      [a-zA-Z0-9.~_-]) encoded+="$char" ;;
+      *)
+        printf -v hex '%%%02X' "'$char"
+        encoded+="$hex"
+        ;;
+    esac
+  done
+
+  printf '%s' "$encoded"
+}
+
+write_repo_file_without_name() {
+  local name="$1"
+  local target_file="$2"
+  local tmp_file="$3"
+
+  awk -F'|' -v repo_name="$name" '
+    {
+      trimmed = $1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
+      if (trimmed != repo_name) {
+        print
+      }
+    }
+  ' "$target_file" >"$tmp_file"
+}
+
 ensure_repo_list_exists() {
+  mkdir -p "$GHOSTTY_DIR"
+
   if [ ! -f "$REPO_LIST_FILE" ]; then
     cat >"$REPO_LIST_FILE" <<'EOF'
 # name|owner/repo|branch|path
@@ -34,99 +97,159 @@ EOF
   fi
 }
 
-# --------- Load only valid lines (4 fields)
 load_repo_lines() {
   awk -F'|' '
-    /^[[:space:]]*#/ { next }        # comments
-    /^[[:space:]]*$/ { next }        # empty
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*$/ { next }
     NF==4 {
-      # trim whitespace on each field
       for (i=1;i<=NF;i++){ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i) }
       print $0
     }
   ' "$REPO_LIST_FILE" 2>/dev/null || true
 }
 
-# --------- Pick a random repo (no mapfile needed)
-choose_random_repo() {
+validate_repo_line() {
+  local line="$1"
+  local name owner_repo branch subpath
+
+  IFS='|' read -r name owner_repo branch subpath <<<"$line"
+
+  [ -n "$name" ] || return 1
+  printf '%s' "$name" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+  [ -n "$owner_repo" ] || return 1
+  printf '%s' "$owner_repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 1
+  [ -n "$branch" ] || branch="main"
+  printf '%s' "$branch" | grep -Eq '^[^[:cntrl:]|]+$' || return 1
+  if [ -n "$subpath" ] && ! printf '%s' "$subpath" | grep -Eq '^[^[:cntrl:]|]+$'; then
+    return 1
+  fi
+}
+
+load_repo_candidates() {
   local line
-  local -a LINES=()
+
+  REPO_CANDIDATES=()
   while IFS= read -r line; do
-    LINES+=("$line")
+    if validate_repo_line "$line"; then
+      REPO_CANDIDATES+=("$line")
+    else
+      log "Skipping invalid repo entry: $line"
+    fi
   done < <(load_repo_lines)
 
-  if [ "${#LINES[@]}" -eq 0 ]; then
-    log "No valid repos in $REPO_LIST_FILE"; exit 1
-  fi
+  [ "${#REPO_CANDIDATES[@]}" -gt 0 ] || die "No valid repos in $REPO_LIST_FILE"
+}
 
-  local idx=$((RANDOM % ${#LINES[@]}))
-  IFS='|' read -r REPO_NAME OWNER_REPO BRANCH SUBPATH <<<"${LINES[$idx]}"
+select_repo_line() {
+  local line="$1"
 
+  IFS='|' read -r REPO_NAME OWNER_REPO BRANCH SUBPATH <<<"$line"
   [ -n "${BRANCH:-}" ] || BRANCH="main"
   SUBPATH="${SUBPATH:-}"
-  SUBPATH="${SUBPATH#/}"; SUBPATH="${SUBPATH%/}"  # normalize path
+  SUBPATH="${SUBPATH#/}"
+  SUBPATH="${SUBPATH%/}"
 
   log "Selected repo: ${REPO_NAME:-$OWNER_REPO} (branch: $BRANCH path: ${SUBPATH:-/})"
 }
 
-# --------- Build API and RAW URLs for GitHub
-build_repo_urls() {
+build_repo_api_url() {
   local api="https://api.github.com/repos/$OWNER_REPO/contents"
-  [ -n "$SUBPATH" ] && api="$api/$SUBPATH"
-  API_URL="$api?ref=$BRANCH"
-
-  RAW_BASE="https://raw.githubusercontent.com/$OWNER_REPO/$BRANCH"
-  [ -n "$SUBPATH" ] && RAW_BASE="$RAW_BASE/$SUBPATH"
+  [ -n "$SUBPATH" ] && api="$api/$(urlencode_path "$SUBPATH")"
+  API_URL="$api?ref=$(urlencode_value "$BRANCH")"
 }
 
-# --------- Fetch image list from the selected repo
+curl_fetch() {
+  "$CURL_BIN" --fail --silent --show-error --location --retry 3 --retry-delay 1 --connect-timeout 10 "$@"
+}
+
+curl_fetch_api() {
+  local output_file="$1"
+  shift
+
+  "$CURL_BIN" --silent --show-error --location --retry 3 --retry-delay 1 --connect-timeout 10 -o "$output_file" -w '%{http_code}' "$@"
+}
+
 fetch_images_from_repo() {
   log "Fetching image list from GitHub..."
 
-  # Headers: always set User-Agent; if GITHUB_TOKEN is set, add auth to avoid rate limit
   local -a headers
+  local json github_message http_code json_file
+
   headers=(-H "User-Agent: ghostty-wall")
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     headers+=(-H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
   fi
 
-  local json
-  if ! json=$(curl -fsSL "${headers[@]}" "$API_URL"); then
-    log "Failed to contact GitHub for $API_URL"; return 1
+  json_file="$(mktemp_file)"
+  if ! http_code=$(curl_fetch_api "$json_file" "${headers[@]}" "$API_URL"); then
+    rm -f "$json_file"
+    log "Failed to contact GitHub for $API_URL"
+    return 1
   fi
 
-  IMAGES=()
-  while IFS= read -r name; do
-    IMAGES+=("$name")
+  json="$(< "$json_file")"
+  rm -f "$json_file"
+
+  github_message="$(printf '%s\n' "$json" | sed -nE 's/.*"message"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | awk 'NR == 1 { print; exit }')"
+  if [ "$http_code" = "404" ]; then
+    log "Repo path not found: $OWNER_REPO/${SUBPATH:-}@${BRANCH}"
+    return 1
+  fi
+
+  if [ "$http_code" != "200" ]; then
+    if [ "$github_message" = "Not Found" ]; then
+      log "Repo path not found: $OWNER_REPO/${SUBPATH:-}@${BRANCH}"
+    elif [ -n "$github_message" ]; then
+      log "GitHub API error for $OWNER_REPO/${SUBPATH:-}@${BRANCH}: $github_message"
+    else
+      log "GitHub API returned HTTP $http_code for $OWNER_REPO/${SUBPATH:-}@${BRANCH}"
+    fi
+    return 1
+  fi
+
+  IMAGE_URLS=()
+  while IFS= read -r url; do
+    IMAGE_URLS+=("$url")
   done < <(printf '%s\n' "$json" \
-      | grep -oE '"name"\s*:\s*"[^"]+"' \
-      | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/' \
-      | grep -iE '\.(jpe?g|png|gif|webp)$' || true)
+    | grep -oE '"download_url"[[:space:]]*:[[:space:]]*"[^"]+"' \
+    | sed -E 's/.*"download_url"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' \
+    | grep -iE '\.(jpe?g|png|gif|webp)$' || true)
 
-  if [ "${#IMAGES[@]}" -eq 0 ]; then
-    log "No images found in $OWNER_REPO/${SUBPATH:-}@${BRANCH}"; return 1
+  if [ "${#IMAGE_URLS[@]}" -eq 0 ]; then
+    log "No images found in $OWNER_REPO/${SUBPATH:-}@${BRANCH}"
+    return 1
   fi
-  log "Found ${#IMAGES[@]} images."
+
+  log "Found ${#IMAGE_URLS[@]} images."
 }
 
-# --------- Pick a random image and download it
 pick_and_download_image() {
-  local idx=$((RANDOM % ${#IMAGES[@]}))
-  local sel="${IMAGES[$idx]}"
-  local url="$RAW_BASE/$sel"
-  local ext="${sel##*.}"
+  local idx url sel ext tmp_image
+
+  mkdir -p "$TEMP_DIR"
+
+  idx=$((RANDOM % ${#IMAGE_URLS[@]}))
+  url="${IMAGE_URLS[$idx]}"
+  sel="${url##*/}"
+  ext="${sel##*.}"
   CURRENT_IMAGE="$TEMP_DIR/current_wallpaper.$ext"
+  tmp_image="$TEMP_DIR/.current_wallpaper.$ext.tmp"
 
   log "Selected image: $sel"
   log "Downloading: $url"
-  if ! curl -fsSL "$url" -o "$CURRENT_IMAGE"; then
-    log "Failed to download image"; return 1
+  if ! curl_fetch "$url" -o "$tmp_image"; then
+    rm -f "$tmp_image"
+    log "Failed to download image"
+    return 1
   fi
+
+  mv "$tmp_image" "$CURRENT_IMAGE"
   log "Image ready: $CURRENT_IMAGE"
 }
 
-# --------- Write mini-config and ensure include in main Ghostty config
 write_wall_conf_and_include() {
+  mkdir -p "$GHOSTTY_DIR"
+
   cat >"$WALL_CONF" <<EOF
 background-image=$CURRENT_IMAGE
 background-image-fit=cover
@@ -135,25 +258,34 @@ background-image-opacity=0.1
 EOF
 
   [ -f "$MAIN_CONF" ] || touch "$MAIN_CONF"
-  if ! grep -qsF "config-file = $WALL_CONF" "$MAIN_CONF"; then
+  if ! grep -qsE '^config-file[[:space:]]*=[[:space:]]*"?'"$WALL_CONF"'"?[[:space:]]*$' "$MAIN_CONF"; then
     printf '\nconfig-file = %s\n' "$WALL_CONF" >> "$MAIN_CONF"
     log "Added include to Ghostty main config."
   fi
 }
 
-# --------- Reload Ghostty if running (macOS) — NOTE: OSA must start at column 0
 reload_ghostty_if_running() {
-  case "$(uname)" in
+  local ghostty_app
+
+  case "$OS_TYPE" in
     Darwin)
-      # Detect if Ghostty (stable or nightly) is running via System Events
-      if /usr/bin/osascript -e '
+      if ! command -v "$OSASCRIPT_BIN" >/dev/null 2>&1; then
+        log "Automatic reload is unavailable: osascript not found."
+        return 0
+      fi
+
+      ghostty_app="$("$OSASCRIPT_BIN" -e '
         tell application "System Events"
           set pn to name of processes
-          return (pn contains "Ghostty") or (pn contains "Ghostty Nightly")
-        end tell' | grep -qi true; then
-        log "Reloading Ghostty config (⌘⇧,)..."
-        /usr/bin/osascript <<'OSA' 2>/dev/null || true
-tell application "Ghostty" to activate
+          if pn contains "Ghostty" then return "Ghostty"
+          if pn contains "Ghostty Nightly" then return "Ghostty Nightly"
+          return ""
+        end tell' 2>/dev/null || true)"
+
+      if [ -n "$ghostty_app" ]; then
+        log "Reloading ${ghostty_app} config (Cmd+Shift+,)..."
+        GHOSTTY_APP="$ghostty_app" "$OSASCRIPT_BIN" <<'OSA' 2>/dev/null || true
+tell application (system attribute "GHOSTTY_APP") to activate
 tell application "System Events" to keystroke "," using {command down, shift down}
 OSA
       else
@@ -164,48 +296,84 @@ OSA
   esac
 }
 
-# --------- Single run
 run_once() {
+  local idx line
+
+  require_command "$CURL_BIN"
   ensure_repo_list_exists
-  choose_random_repo
-  build_repo_urls
-  fetch_images_from_repo
-  pick_and_download_image
-  write_wall_conf_and_include
-  reload_ghostty_if_running
+  load_repo_candidates
+
+  while [ "${#REPO_CANDIDATES[@]}" -gt 0 ]; do
+    idx=$((RANDOM % ${#REPO_CANDIDATES[@]}))
+    line="${REPO_CANDIDATES[$idx]}"
+    unset 'REPO_CANDIDATES[$idx]'
+    REPO_CANDIDATES=("${REPO_CANDIDATES[@]}")
+
+    select_repo_line "$line"
+    build_repo_api_url
+    if fetch_images_from_repo && pick_and_download_image; then
+      write_wall_conf_and_include
+      reload_ghostty_if_running
+      return 0
+    fi
+
+    log "Trying next configured repo..."
+  done
+
+  die "Unable to fetch a wallpaper from any configured repository"
 }
 
-# --------- Repo list utilities
 cmd_list() {
   ensure_repo_list_exists
   echo "=== $REPO_LIST_FILE ==="
   cat "$REPO_LIST_FILE"
 }
+
 cmd_add() {
   ensure_repo_list_exists
   local line="${1:-}"
+  local name tmp
+
   if [ -z "$line" ]; then
-    echo "Usage: $0 --add 'name|owner/repo|branch|path'"; exit 1
+    echo "Usage: $0 --add 'name|owner/repo|branch|path'"
+    exit 1
   fi
-  # simple validation: 4 fields
-  if [ "$(echo "$line" | awk -F'|' '{print NF}')" -ne 4 ]; then
-    echo "Invalid line: must have 4 '|' separated fields"; exit 1
+
+  if [ "$(printf '%s' "$line" | awk -F'|' '{print NF}')" -ne 4 ]; then
+    echo "Invalid line: must have 4 '|' separated fields"
+    exit 1
   fi
-  local name="${line%%|*}"
-  local tmp; tmp="$(mktemp)"
-  grep -vE "^${name}\|" "$REPO_LIST_FILE" >"$tmp" 2>/dev/null || true
+
+  if ! validate_repo_line "$line"; then
+    echo "Invalid line: expected name|owner/repo|branch|path"
+    exit 1
+  fi
+
+  name="${line%%|*}"
+  tmp="$(mktemp_file)"
+  write_repo_file_without_name "$name" "$REPO_LIST_FILE" "$tmp"
   mv "$tmp" "$REPO_LIST_FILE"
-  echo "$line" >>"$REPO_LIST_FILE"
+  printf '%s\n' "$line" >> "$REPO_LIST_FILE"
   log "Added/updated repo: $line"
 }
+
 cmd_remove() {
   ensure_repo_list_exists
   local name="${1:-}"
+  local tmp
+
   if [ -z "$name" ]; then
-    echo "Usage: $0 --remove <name>"; exit 1
+    echo "Usage: $0 --remove <name>"
+    exit 1
   fi
-  local tmp; tmp="$(mktemp)"
-  grep -vE "^${name}\|" "$REPO_LIST_FILE" >"$tmp" 2>/dev/null || true
+
+  if ! printf '%s' "$name" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "Invalid repo name: expected letters, numbers, dot, underscore, or hyphen"
+    exit 1
+  fi
+
+  tmp="$(mktemp_file)"
+  write_repo_file_without_name "$name" "$REPO_LIST_FILE" "$tmp"
   mv "$tmp" "$REPO_LIST_FILE"
   log "Removed (if present) repo: $name"
 }
@@ -213,7 +381,7 @@ cmd_remove() {
 show_help() {
   cat <<EOF
 Usage:
-  $0                # one-off: pick repo+image and reload Ghostty if running
+  $0                # one-off: pick repo+image and reload Ghostty on macOS
   $0 --list         # show repo list
   $0 --add "name|owner/repo|branch|path"
   $0 --remove <name>
@@ -228,12 +396,16 @@ Tips:
 EOF
 }
 
-# --------- Arg parsing
 case "${1:-}" in
   --list)   cmd_list ;;
   --add)    shift; cmd_add "${1:-}" ;;
   --remove) shift; cmd_remove "${1:-}" ;;
-  --help|-h|"") [ "${1:-}" = "" ] && run_once || show_help ;;
-  *) show_help ;;
+  --help|-h|"")
+    if [ "${1:-}" = "" ]; then
+      run_once
+    else
+      show_help
+    fi
+    ;;
+  *) show_help; exit 1 ;;
 esac
-
