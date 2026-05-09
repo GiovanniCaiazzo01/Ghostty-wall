@@ -13,7 +13,6 @@ GHOSTTY_DIR="$CONF_DIR/ghostty"
 WALL_CONF="$GHOSTTY_DIR/wallpaper.conf"
 MAIN_CONF="$GHOSTTY_DIR/config"
 REPO_LIST_FILE="$GHOSTTY_DIR/wallpaper_repos.txt"
-INSTALL_STATE_FILE="$GHOSTTY_DIR/install-path"
 TEMP_DIR="${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}"
 CURL_BIN="${CURL_BIN:-curl}"
 OS_TYPE="${GHOSTTY_WALL_OS_TYPE:-$(uname)}"
@@ -397,6 +396,12 @@ case "${1:-}" in
   --list)   cmd_list ;;
   --add)    shift; cmd_add "${1:-}" ;;
   --remove) shift; cmd_remove "${1:-}" ;;
-  --help|-h|"") [ "${1:-}" = "" ] && run_once || show_help ;;
+  --help|-h|"")
+    if [ "${1:-}" = "" ]; then
+      run_once
+    else
+      show_help
+    fi
+    ;;
   *) show_help; exit 1 ;;
 esac
