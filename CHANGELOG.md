@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [0.2.2]
+
+### Changed
+- Added Linux automatic reload support through Ghostty's documented systemd user service, `app-com.mitchellh.ghostty.service`.
+- Improved Linux reload fallback messages to explain that the wallpaper is already configured and can be applied immediately with a manual Ghostty reload or restart.
+
+### Documentation
+- Clarified the Linux systemd-user-service requirement for automatic Ghostty reload support.
+
 ## [0.2.1]
 
 ### Changed
