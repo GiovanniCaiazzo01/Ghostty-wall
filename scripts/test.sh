@@ -47,7 +47,7 @@ assert_occurrences() {
   local count="$3"
   local actual
 
-  actual="$(grep -F -c "$expected" "$file" || true)"
+  actual="$(grep -F -c -- "$expected" "$file" || true)"
   [ "$actual" = "$count" ] || fail "expected $count occurrences of '$expected' in $file, got $actual"
 }
 
@@ -128,12 +128,13 @@ run_cli_tests() {
 }
 
 run_runtime_tests() {
-  local temp_home temp_config temp_dir curl_mock output state_file
+  local temp_home temp_config temp_dir curl_mock output state_file systemctl_mock
 
   temp_home="$(mktemp_dir)"
   temp_config="$temp_home/config"
   temp_dir="$temp_home/tmp"
   curl_mock="$temp_home/mock-curl.sh"
+  systemctl_mock="$temp_home/mock-systemctl-unavailable.sh"
   state_file="$temp_home/curl-state"
   mkdir -p "$temp_config/ghostty" "$temp_dir"
 
@@ -194,10 +195,17 @@ EOF
 
   chmod +x "$curl_mock"
 
-  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" GHOSTTY_WALL_TEST_STATE="$state_file" GHOSTTY_WALL_OS_TYPE='Linux' CURL_BIN="$curl_mock" "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
+  cat >"$systemctl_mock" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+
+  chmod +x "$systemctl_mock"
+
+  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" GHOSTTY_WALL_TEST_STATE="$state_file" GHOSTTY_WALL_OS_TYPE='Linux' CURL_BIN="$curl_mock" SYSTEMCTL_BIN="$systemctl_mock" "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
 
   assert_output_contains "$output" "Trying next configured repo"
-  assert_output_contains "$output" "Automatic reload is only supported on macOS"
+  assert_output_contains "$output" "Automatic Linux reload is unavailable: Ghostty's systemd user service is not active. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
   assert_file "$temp_dir/current_wallpaper.jpg"
   assert_contains "$temp_config/ghostty/wallpaper.conf" "background-image=$temp_dir/current_wallpaper.jpg"
   assert_contains "$temp_config/ghostty/config" "config-file = $temp_config/ghostty/wallpaper.conf"
@@ -205,6 +213,118 @@ EOF
   output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" GHOSTTY_WALL_TEST_STATE="$state_file" CURL_BIN="$curl_mock" "$REPO_ROOT/bin/ghostty-wall" --list)"
   assert_output_contains "$output" "second|owner/two|main|"
   assert_occurrences "$temp_config/ghostty/config" "config-file = $temp_config/ghostty/wallpaper.conf" 1
+
+  rm -rf "$temp_home"
+}
+
+run_linux_reload_tests() {
+  local temp_home temp_config temp_dir curl_mock systemctl_mock output systemctl_log
+
+  temp_home="$(mktemp_dir)"
+  temp_config="$temp_home/config"
+  temp_dir="$temp_home/tmp"
+  curl_mock="$temp_home/mock-curl.sh"
+  systemctl_mock="$temp_home/mock-systemctl.sh"
+  systemctl_log="$temp_home/systemctl.log"
+  mkdir -p "$temp_config/ghostty" "$temp_dir"
+
+  cat >"$temp_config/ghostty/wallpaper_repos.txt" <<'EOF'
+linux|owner/good|main|
+EOF
+
+  cat >"$curl_mock" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+output_file=""
+url=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o)
+      output_file="$2"
+      shift 2
+      ;;
+    -w)
+      shift 2
+      ;;
+    http://*|https://*)
+      url="$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+case "$url" in
+  *api.github.com* )
+    printf '[{"download_url":"https://example.com/linux.jpg"}]\n' >"$output_file"
+    printf '200'
+    ;;
+  *example.com/linux.jpg* )
+    printf 'fake image data\n' >"$output_file"
+    ;;
+  * )
+    printf 'unexpected url: %s\n' "$url" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  cat >"$systemctl_mock" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${GHOSTTY_WALL_SYSTEMCTL_LOG:?}"
+mode="${GHOSTTY_WALL_SYSTEMCTL_MODE:?}"
+
+printf '%s\n' "$*" >>"$log_file"
+
+case "$mode:$*" in
+  active:'--user is-active --quiet app-com.mitchellh.ghostty.service')
+    exit 0
+    ;;
+  active:'--user reload app-com.mitchellh.ghostty.service')
+    exit 0
+    ;;
+  fail-reload:'--user is-active --quiet app-com.mitchellh.ghostty.service')
+    exit 0
+    ;;
+  fail-reload:'--user reload app-com.mitchellh.ghostty.service')
+    exit 1
+    ;;
+  inactive:'--user is-active --quiet app-com.mitchellh.ghostty.service')
+    exit 1
+    ;;
+  *)
+    printf 'unexpected systemctl args: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  chmod +x "$curl_mock" "$systemctl_mock"
+
+  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" CURL_BIN="$curl_mock" SYSTEMCTL_BIN="$systemctl_mock" GHOSTTY_WALL_SYSTEMCTL_LOG="$systemctl_log" GHOSTTY_WALL_SYSTEMCTL_MODE='active' GHOSTTY_WALL_OS_TYPE='Linux' "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
+  assert_output_contains "$output" "Reloading Ghostty config via systemd user service"
+  assert_occurrences "$systemctl_log" "--user is-active --quiet app-com.mitchellh.ghostty.service" 1
+  assert_occurrences "$systemctl_log" "--user reload app-com.mitchellh.ghostty.service" 1
+
+  : > "$systemctl_log"
+  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" CURL_BIN="$curl_mock" SYSTEMCTL_BIN="$systemctl_mock" GHOSTTY_WALL_SYSTEMCTL_LOG="$systemctl_log" GHOSTTY_WALL_SYSTEMCTL_MODE='fail-reload' GHOSTTY_WALL_OS_TYPE='Linux' "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
+  assert_output_contains "$output" "Reloading Ghostty config via systemd user service"
+  assert_output_contains "$output" "Automatic Linux reload failed via systemd user service. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
+  assert_occurrences "$systemctl_log" "--user reload app-com.mitchellh.ghostty.service" 1
+
+  : > "$systemctl_log"
+  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" CURL_BIN="$curl_mock" SYSTEMCTL_BIN="$systemctl_mock" GHOSTTY_WALL_SYSTEMCTL_LOG="$systemctl_log" GHOSTTY_WALL_SYSTEMCTL_MODE='inactive' GHOSTTY_WALL_OS_TYPE='Linux' "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
+  assert_output_contains "$output" "Automatic Linux reload is unavailable: Ghostty's systemd user service is not active. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
+  assert_occurrences "$systemctl_log" "--user reload app-com.mitchellh.ghostty.service" 0
+
+  output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" GHOSTTY_WALL_TEMP_DIR="$temp_dir" CURL_BIN="$curl_mock" SYSTEMCTL_BIN='/definitely/missing/systemctl' GHOSTTY_WALL_OS_TYPE='Linux' "$REPO_ROOT/bin/ghostty-wall" 2>&1)"
+  assert_output_contains "$output" "Automatic Linux reload is unavailable: systemctl not found. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
 
   rm -rf "$temp_home"
 }
@@ -665,6 +785,7 @@ run_runtime_tests
 run_failure_runtime_tests
 run_api_error_tests
 run_download_failure_test
+run_linux_reload_tests
 run_macos_reload_tests
 run_missing_command_test
 run_installer_tests

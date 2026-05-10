@@ -16,8 +16,10 @@
 4. Run `ghostty-wall`
 5. Confirm `${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/wallpaper.conf` exists
 6. Confirm `${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/config` contains the include line
-7. Run `./scripts/uninstall.sh`
-8. Confirm the binary was removed and config files were left intact
+7. If Ghostty is running via `app-com.mitchellh.ghostty.service`, confirm automatic reload works through the systemd user service
+8. Otherwise, confirm the fallback log clearly instructs the user to press `Ctrl+Shift+,` or restart Ghostty
+9. Run `./scripts/uninstall.sh`
+10. Confirm the binary was removed and config files were left intact
 
 ## macOS Smoke Test
 

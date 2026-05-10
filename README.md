@@ -14,7 +14,7 @@ It runs on macOS and Linux, and auto-wires your Ghostty config on first run.
 
 * Randomly pick an image from one of several GitHub repos (you control the list)
 * Writes a small include file (`$XDG_CONFIG_HOME/ghostty/wallpaper.conf`, default `~/.config/ghostty/wallpaper.conf`) and ensures it’s included in Ghostty’s main config
-* Tries to reload Ghostty automatically if it's running on macOS
+* Tries to reload Ghostty automatically on macOS, and on Linux when Ghostty is running via its documented systemd user service
 * Minimal dependencies (Bash 3.2, curl)
 * GitHub token support to avoid API rate limits
 
@@ -72,7 +72,7 @@ This will:
 
 * Create/prepare your Ghostty config
 * Download a random image
-* Attempt to reload Ghostty automatically if it's open on macOS
+* Attempt to reload Ghostty automatically if it's open on macOS, or via the Ghostty systemd user service on Linux when available
 * You’ll see log messages in your terminal
 
 ## 🏷️ GitHub Releases
@@ -153,7 +153,7 @@ If the installer falls back to `~/.local/bin`, it will append that directory to 
 ## 🧪 Usage
 
 ```bash
-ghostty-wall                 # one-off: pick repo+image and reload Ghostty on macOS
+ghostty-wall                 # one-off: pick repo+image and reload Ghostty when supported
 ghostty-wall --list          # show the repo list file
 ghostty-wall --add "name|owner/repo|branch|path"
 ghostty-wall --remove <name>
@@ -254,6 +254,7 @@ k1ngwalls|k1ng440/Wallpapers|master|wallpapers
 5. Writes/updates `$XDG_CONFIG_HOME/ghostty/wallpaper.conf` to point to that file
 6. Ensures `$XDG_CONFIG_HOME/ghostty/config` includes the `wallpaper.conf`
 7. If Ghostty is running on macOS, attempts a reload via AppleScript (Cmd+Shift+,)
+8. If Ghostty is running on Linux via `app-com.mitchellh.ghostty.service`, attempts a reload via `systemctl --user reload app-com.mitchellh.ghostty.service`
 
 ---
 
@@ -287,7 +288,7 @@ rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/wallpaper.conf"
 
 * Ghostty only
 * Online sources only (GitHub repos); local folders are not supported at this time
-* Automatic Ghostty reload is macOS-only; Linux applies the new wallpaper on the next config reload or launch
+* Automatic Ghostty reload on Linux requires Ghostty's documented systemd user service (`app-com.mitchellh.ghostty.service`)
 * If your Ghostty config is in a non-standard location, ensure `$XDG_CONFIG_HOME/ghostty/config` exists or symlink it
 
 ---
@@ -298,7 +299,10 @@ rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/wallpaper.conf"
 A: If the installer used `~/.local/bin`, open a new terminal or source the profile the installer updated. On macOS that is typically `~/.zshrc` or `~/.bash_profile`; on Linux it is typically `~/.bashrc` or `~/.profile`.
 
 **Q: Ghostty didn’t reload.**
-A: Make sure Ghostty is running and macOS accessibility permissions allow automation (System Settings → Privacy & Security → Automation/Accessibility). The tool will still apply the wallpaper on Ghostty’s next launch.
+A: On macOS, make sure Ghostty is running and accessibility permissions allow automation (System Settings → Privacy & Security → Automation/Accessibility). On Linux, automatic reload only works when Ghostty is managed by its documented systemd user service, `app-com.mitchellh.ghostty.service`. If that service is installed but inactive, or unavailable for your installation method, press `Ctrl+Shift+,` in Ghostty or restart it. If you want Linux automatic reload, check the Ghostty Linux/systemd documentation for the supported setup on your system. The tool will still apply the wallpaper on Ghostty’s next launch.
+
+**Q: How do I enable automatic reload on Linux?**
+A: `ghostty-wall` only uses Ghostty's documented Linux reload path: `systemctl --user reload app-com.mitchellh.ghostty.service`. This means Ghostty must be running through that documented systemd user service. Check the Ghostty Linux/systemd docs for your installation method, then verify the service with `systemctl --user is-active app-com.mitchellh.ghostty.service`.
 
 **Q: GitHub API rate-limited me.**
 A: Export a `GITHUB_TOKEN` (a classic Personal Access Token is enough for public repos).

@@ -17,6 +17,8 @@ TEMP_DIR="${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}"
 CURL_BIN="${CURL_BIN:-curl}"
 OS_TYPE="${GHOSTTY_WALL_OS_TYPE:-$(uname)}"
 OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
+SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
+GHOSTTY_SYSTEMD_SERVICE="${GHOSTTY_SYSTEMD_SERVICE:-app-com.mitchellh.ghostty.service}"
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 die() { log "$*"; exit 1; }
@@ -292,7 +294,23 @@ OSA
         log "Ghostty is not running: it will use the new wallpaper on next launch."
       fi
       ;;
-    *) log "Automatic reload is only supported on macOS." ;;
+    Linux)
+      if ! command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1; then
+        log "Automatic Linux reload is unavailable: systemctl not found. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
+        return 0
+      fi
+
+      if ! "$SYSTEMCTL_BIN" --user is-active --quiet "$GHOSTTY_SYSTEMD_SERVICE" >/dev/null 2>&1; then
+        log "Automatic Linux reload is unavailable: Ghostty's systemd user service is not active. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
+        return 0
+      fi
+
+      log "Reloading Ghostty config via systemd user service..."
+      if ! "$SYSTEMCTL_BIN" --user reload "$GHOSTTY_SYSTEMD_SERVICE" >/dev/null 2>&1; then
+        log "Automatic Linux reload failed via systemd user service. The wallpaper is already configured; press Ctrl+Shift+, in Ghostty or restart it to apply now. See the Ghostty Linux/systemd docs for automatic reload support."
+      fi
+      ;;
+    *) log "Automatic reload is unavailable on this platform. Apply the wallpaper on Ghostty's next config reload or launch." ;;
   esac
 }
 
@@ -381,7 +399,7 @@ cmd_remove() {
 show_help() {
   cat <<EOF
 Usage:
-  $0                # one-off: pick repo+image and reload Ghostty on macOS
+  $0                # one-off: pick repo+image and reload Ghostty when supported
   $0 --list         # show repo list
   $0 --add "name|owner/repo|branch|path"
   $0 --remove <name>
