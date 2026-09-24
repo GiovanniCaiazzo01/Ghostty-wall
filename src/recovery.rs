@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     domain::{EnvironmentManifest, WallpaperManifest},
-    history::{HistoryError, inspect_history},
+    history::{HistoryError, inspect_history_unlocked},
     init::hook_count,
 };
 
@@ -83,7 +83,7 @@ pub fn inspect_recovery_state(
     effective_root_config: &Path,
 ) -> Result<RecoveryInspection, RecoveryError> {
     let _lock = shared_state_lock(&managed_root.join("state.lock"))?;
-    let history = inspect_history(managed_root)?;
+    let history = inspect_history_unlocked(managed_root)?;
     let projection_path = managed_root.join("current.ghostty");
     let actual = read_projection(&projection_path)?;
     let projection = match history.latest() {
@@ -109,6 +109,29 @@ pub fn inspect_recovery_state(
     };
     inspect_integration_hook(effective_root_config, &projection_path)?;
     Ok(RecoveryInspection { projection })
+}
+
+/// Restore only derived Projection state from latest committed Activation.
+pub fn reconcile_recovery_state(
+    managed_root: &Path,
+    effective_root_config: &Path,
+) -> Result<(), RecoveryError> {
+    let _lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
+    inspect_integration_hook(effective_root_config, &managed_root.join("current.ghostty"))?;
+    reconcile_recovery_state_unlocked(managed_root)
+}
+
+pub(crate) fn reconcile_recovery_state_unlocked(managed_root: &Path) -> Result<(), RecoveryError> {
+    let history = inspect_history_unlocked(managed_root)?;
+    let projection = managed_root.join("current.ghostty");
+    match history.latest() {
+        Some(activation) => atomic_projection(
+            managed_root,
+            &projection,
+            &render_projection(managed_root, activation.environment()),
+        ),
+        None => remove_projection(managed_root, &projection),
+    }
 }
 
 fn io_error(path: &Path, source: io::Error) -> RecoveryError {
@@ -148,6 +171,37 @@ fn shared_state_lock(_path: &Path) -> Result<File, RecoveryError> {
     Err(RecoveryError::UnsupportedPlatform)
 }
 
+#[cfg(unix)]
+pub(crate) fn exclusive_state_lock(path: &Path) -> Result<File, RecoveryError> {
+    use std::{os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| io_error(path, error))?;
+    if !file
+        .metadata()
+        .map_err(|error| io_error(path, error))?
+        .is_file()
+    {
+        return Err(io_error(
+            path,
+            io::Error::other("state lock is not a regular file"),
+        ));
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(io_error(path, io::Error::last_os_error()));
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn exclusive_state_lock(_path: &Path) -> Result<File, RecoveryError> {
+    Err(RecoveryError::UnsupportedPlatform)
+}
+
 enum ActualProjection {
     Absent,
     Invalid,
@@ -179,7 +233,7 @@ fn read_projection(path: &Path) -> Result<ActualProjection, RecoveryError> {
     let pinned = PathBuf::from(format!("/proc/self/fd/{}", handle.as_raw_fd()));
     let mut file = File::open(&pinned).map_err(|error| io_error(path, error))?;
     let mut bytes = Vec::new();
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(1024 * 1024 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| io_error(path, error))?;
@@ -199,7 +253,10 @@ fn read_projection(_path: &Path) -> Result<ActualProjection, RecoveryError> {
     Err(RecoveryError::UnsupportedPlatform)
 }
 
-fn inspect_integration_hook(config: &Path, projection: &Path) -> Result<(), RecoveryError> {
+pub(crate) fn inspect_integration_hook(
+    config: &Path,
+    projection: &Path,
+) -> Result<(), RecoveryError> {
     let target =
         fs::canonicalize(config).map_err(|_| RecoveryError::IntegrationDrift(config.to_owned()))?;
     let bytes = read_regular_bounded(&target, 1024 * 1024)?;
@@ -239,6 +296,47 @@ fn read_regular_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, RecoveryErro
         return Err(io_error(path, io::Error::other("file exceeds size limit")));
     }
     Ok(bytes)
+}
+
+pub(crate) fn materialize_projection_unlocked(
+    root: &Path,
+    manifest: &EnvironmentManifest,
+) -> Result<(), RecoveryError> {
+    atomic_projection(
+        root,
+        &root.join("current.ghostty"),
+        &render_projection(root, manifest),
+    )
+}
+
+pub(crate) fn render_projection(root: &Path, manifest: &EnvironmentManifest) -> Vec<u8> {
+    let mut rendered = String::new();
+    for (key, value) in projection_model(root, manifest) {
+        if let Some(index) = key.strip_prefix("palette:") {
+            rendered.push_str(&format!("palette = {index}={value}\n"));
+        } else {
+            let value = match key.as_str() {
+                "background-image-opacity" | "background-opacity" => render_fixed(&value, 6),
+                "font-size" => render_fixed(&value, 3),
+                _ => value,
+            };
+            rendered.push_str(&format!("{key} = {value}\n"));
+        }
+    }
+    rendered.into_bytes()
+}
+
+fn render_fixed(value: &str, places: usize) -> String {
+    let value = value
+        .parse::<u64>()
+        .expect("Projection model uses integers");
+    let scale = 10u64.pow(u32::try_from(places).expect("small fixed-point precision"));
+    format!(
+        "{}.{:0width$}",
+        value / scale,
+        value % scale,
+        width = places
+    )
 }
 
 fn projection_model(root: &Path, manifest: &EnvironmentManifest) -> BTreeMap<String, String> {
@@ -391,6 +489,50 @@ fn fixed_decimal(value: &str, places: usize) -> Option<String> {
         .checked_mul(scale)?
         .checked_add(fraction.parse::<u64>().unwrap_or(0))
         .map(|value| value.to_string())
+}
+
+fn atomic_projection(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), RecoveryError> {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let temp = root.join(format!(".tmp-projection-{}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let result = (|| {
+        let mut file = options
+            .open(&temp)
+            .map_err(|error| io_error(&temp, error))?;
+        file.write_all(bytes)
+            .map_err(|error| io_error(&temp, error))?;
+        file.sync_all().map_err(|error| io_error(&temp, error))?;
+        fs::rename(&temp, path).map_err(|error| io_error(path, error))?;
+        // Directory fsync makes atomic replacement durable before any Activation commit.
+        File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| io_error(root, error))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn remove_projection(root: &Path, path: &Path) -> Result<(), RecoveryError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error(path, error)),
+        Ok(metadata) if metadata.is_dir() => {
+            fs::remove_dir(path).map_err(|error| io_error(path, error))?;
+        }
+        Ok(_) => fs::remove_file(path).map_err(|error| io_error(path, error))?,
+    }
+    File::open(root)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| io_error(root, error))
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
