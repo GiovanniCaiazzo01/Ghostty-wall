@@ -39,6 +39,8 @@ fn doctor_reports_verified_failed_and_unavailable_without_mutation() {
     );
     assert_eq!(snapshot(&paths.home), before);
 
+    fs::remove_file(root.join("profiles/welcome.toml")).unwrap();
+    fs::remove_file(root.join("profiles/welcome.png")).unwrap();
     fs::remove_dir(root.join("profiles")).unwrap();
     let damaged = doctor(&paths);
     assert_eq!(damaged.status("managed-layout"), Some(CheckStatus::Failed));

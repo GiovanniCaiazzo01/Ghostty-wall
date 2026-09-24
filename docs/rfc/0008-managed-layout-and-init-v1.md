@@ -138,10 +138,12 @@ First init writes:
 ```toml
 schema_version = 1
 
-[sources]
+[sources.welcome]
+kind = "local-directory"
+path = "profiles"
 ```
 
-No default Profile is created.
+First init also writes `profiles/welcome.toml` and bundled `profiles/welcome.png`, plus a local `welcome` Source in `config.toml`. `plan welcome` works without extra files or a Resolution Seed. Existing published installations keep their Intent unchanged; init never backfills or replaces example files.
 
 ## Eager and optional creation
 
@@ -157,6 +159,8 @@ history/
 history/activations/
 cache/
 config.toml
+profiles/welcome.toml (first init only)
+profiles/welcome.png (first init only)
 state.lock
 ```
 
@@ -206,6 +210,7 @@ create Managed Root safely
 create reserved in-progress marker
 create required directories
 write default config.toml atomically
+create bundled welcome Profile and image without replacing existing files
 create optional cache/
 probe required filesystem capabilities
 create and fsync state.lock
@@ -321,9 +326,9 @@ It may:
 - complete a provably interrupted first init;
 - normalize equivalent Integration Hooks.
 
-Completing interrupted first init is allowed only when a reserved in-progress marker proves the attempt and no Profile, Asset, Environment, or Activation record exists. A valid existing `config.toml` is preserved. A missing `config.toml` may be replaced with default only in that proven pristine interrupted-init state.
+Completing interrupted first init is allowed only when a reserved in-progress marker proves the attempt and no user Profile, Asset, Environment, or Activation record exists. Exact bundled welcome Profile and image bytes are recognized as init-owned; altered or unexpected files stop repair. A valid existing `config.toml` is preserved. A missing `config.toml` may be replaced with default only in that proven pristine interrupted-init state.
 
-When any Profile, Asset, Environment, or Activation exists, Repair MUST NOT synthesize a missing authoritative or durable component. Examples such as missing `config.toml`, `profiles/`, `assets/`, `environments/`, or `history/activations/` are preserved as evidence of possible data loss and reported as failure.
+When any user Profile, Asset, Environment, or Activation exists, Repair MUST NOT synthesize a missing authoritative or durable component. Examples such as missing `config.toml`, `profiles/`, `assets/`, `environments/`, or `history/activations/` are preserved as evidence of possible data loss and reported as failure.
 
 Repair of hooks:
 

@@ -32,6 +32,8 @@ jobs:
           install -m 0755 target/release/ghostty-wall "$name/ghostty-wall"
           install -m 0755 scripts/install-v1.sh "$name/install-v1.sh"
           cp LICENSE README.md "$name/"
+          mkdir "$name/media"
+          cp media/mascot.png "$name/media/"
           tar -czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
       - name: Publish release assets
