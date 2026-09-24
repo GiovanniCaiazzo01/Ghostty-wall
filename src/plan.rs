@@ -22,6 +22,7 @@ use crate::{
     github::{GithubApi, GithubApiError, GithubEntryKind},
     recovery::{RecoveryError, inspect_recovery_state},
     selection::{RandomSelectionError, select_random_v1},
+    theme::{ThemeError, ThemeResolver},
 };
 
 /// Platform observations required to produce complete Plan Operations.
@@ -125,6 +126,9 @@ pub enum PlanError {
     /// Manifest codec failed.
     #[error(transparent)]
     Manifest(#[from] manifest::ManifestCodecError),
+    /// Named theme could not be resolved into the managed color model.
+    #[error(transparent)]
+    Theme(#[from] ThemeError),
     /// Recovery Inspection or effective integration validation failed.
     #[error(transparent)]
     Recovery(#[from] RecoveryError),
@@ -137,7 +141,7 @@ impl PlanError {
             Self::UnknownSource(source_id) => json!({
                 "category": "intent", "code": "intent.unknown-source", "source_id": source_id
             }),
-            Self::Unsupported(_) => json!({
+            Self::Unsupported(_) | Self::Theme(_) => json!({
                 "category": "resolution", "code": "resolution.unsupported-input"
             }),
             Self::MissingSeed => json!({
@@ -259,6 +263,33 @@ pub fn plan_local_profile_json_uninspected(
         seed,
         None,
         None,
+        None,
+    )
+}
+
+/// Resolves local Profile JSON through a named-theme adapter, without Recovery inspection.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_local_profile_with_theme_json_uninspected(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    themes: &dyn ThemeResolver,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        None,
+        None,
+        Some(themes),
     )
 }
 
@@ -284,6 +315,7 @@ pub fn plan_github_profile_json_uninspected(
         seed,
         None,
         Some(github),
+        None,
     )
 }
 
@@ -309,6 +341,34 @@ pub fn plan_local_profile_json(
         seed,
         Some(platform),
         None,
+        None,
+    )
+}
+
+/// Produces complete RFC 0005 Plan JSON through a named-theme adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_local_profile_with_theme_json(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    platform: &PlanPlatform,
+    themes: &dyn ThemeResolver,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        Some(platform),
+        None,
+        Some(themes),
     )
 }
 
@@ -335,6 +395,7 @@ pub fn plan_github_profile_json(
         seed,
         Some(platform),
         Some(github),
+        None,
     )
 }
 
@@ -349,6 +410,7 @@ fn plan_profile_json_inner(
     seed: Option<&crate::domain::ResolutionSeed>,
     platform: Option<&PlanPlatform>,
     github: Option<&dyn GithubApi>,
+    themes: Option<&dyn ThemeResolver>,
 ) -> Result<Value, PlanError> {
     if seed.is_some()
         && !matches!(
@@ -442,7 +504,7 @@ fn plan_profile_json_inner(
         None => (None, None, None, None),
     };
 
-    let colors = match &profile.colors {
+    let (colors, theme_name) = match &profile.colors {
         Some(ColorsIntent::Explicit {
             background,
             foreground,
@@ -461,10 +523,20 @@ fn plan_profile_json_inner(
             if let Some(value) = selection_foreground {
                 colors = colors.with_selection_foreground(*value);
             }
-            Some(colors)
+            (Some(colors), None)
         }
-        Some(_) => return Err(PlanError::Unsupported("only explicit colors implemented")),
-        None => None,
+        Some(ColorsIntent::Theme { theme }) => (
+            Some(
+                themes
+                    .ok_or(PlanError::Unsupported("named theme adapter unavailable"))?
+                    .resolve(theme)?,
+            ),
+            Some(theme.as_str()),
+        ),
+        Some(ColorsIntent::Generated) => {
+            return Err(PlanError::Unsupported("generated colors not implemented"));
+        }
+        None => (None, None),
     };
     let terminal = profile
         .terminal
@@ -522,15 +594,31 @@ fn plan_profile_json_inner(
     insert_optional(&mut plan, "source", source_json);
     insert_optional(&mut plan, "selection", selection_json);
     insert_optional(&mut plan, "asset", asset_json);
-    if profile.colors.is_some() {
-        insert_optional(
-            &mut plan,
-            "color_resolution",
-            Some(json!({ "kind": "explicit" })),
-        );
-    }
+    let color_resolution = if let Some(theme) = theme_name {
+        Some(json!({
+            "kind": "theme",
+            "theme": theme,
+            "content_sha256": theme_content_digest(&manifest_json["colors"])?.to_string(),
+        }))
+    } else if profile.colors.is_some() {
+        Some(json!({ "kind": "explicit" }))
+    } else {
+        None
+    };
+    insert_optional(&mut plan, "color_resolution", color_resolution);
     Ok(plan)
 }
+
+fn theme_content_digest(colors: &Value) -> Result<Sha256Digest, PlanError> {
+    let canonical = serde_jcs::to_vec(colors).map_err(manifest::ManifestCodecError::EncodeJson)?;
+    let mut hash = Sha256::new();
+    hash.update(THEME_RESOLUTION_DOMAIN);
+    hash.update(canonical);
+    Ok(Sha256Digest::from_bytes(hash.finalize().into()))
+}
+
+// RFC 0005 fixes these bytes so theme provenance cannot alias another digest protocol.
+const THEME_RESOLUTION_DOMAIN: &[u8] = b"ghostty-wall.theme-resolution.v1\0";
 
 struct SourceResolution {
     source: Value,
