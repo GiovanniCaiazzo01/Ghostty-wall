@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.0.2]
+
+### Added
+
+- Explicit `init --welcome` seeds the bundled example into an untouched empty v1.0.0 installation; refuses customized Intent and durable state.
+- One `scripts/install.sh` installs Rust v1 from source or release archive; legacy Bash installer remains at tag `v0.2.2`.
+- Local `.scratch/` tracker is no longer published in the current repository tree.
+
 ## [1.0.1]
 
 ### Added

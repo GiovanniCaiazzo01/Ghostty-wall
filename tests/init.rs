@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ghostty_wall::init::{InitError, InitPaths, dry_run, init, init_repair};
+use ghostty_wall::init::{InitError, InitPaths, dry_run, init, init_repair, init_welcome};
 
 #[test]
 fn dry_run_reports_paths_without_writing() {
@@ -192,6 +192,39 @@ fn existing_install_never_recreates_or_overwrites_example() {
         "schema_version = 1\n"
     );
     assert!(!root.join("profiles/welcome.png").exists());
+}
+
+#[test]
+fn opt_in_welcome_refuses_user_intent_and_durable_history() {
+    let paths = test_paths("welcome-user-intent");
+    init(&paths).unwrap();
+    let root = paths.managed_root();
+    let old = "schema_version = 1\n\n[sources]\n";
+    fs::write(root.join("config.toml"), old).unwrap();
+    fs::write(root.join("profiles/welcome.png"), b"user art").unwrap();
+    assert!(matches!(
+        init_welcome(&paths),
+        Err(InitError::WelcomeRequiresEmptyInstall(_))
+    ));
+    assert_eq!(
+        fs::read(root.join("profiles/welcome.png")).unwrap(),
+        b"user art"
+    );
+    assert_eq!(fs::read_to_string(root.join("config.toml")).unwrap(), old);
+
+    fs::remove_file(root.join("profiles/welcome.png")).unwrap();
+    fs::remove_file(root.join("profiles/welcome.toml")).unwrap();
+    fs::write(root.join("profiles/custom.toml"), "schema_version = 1\n").unwrap();
+    assert!(matches!(
+        init_welcome(&paths),
+        Err(InitError::WelcomeRequiresEmptyInstall(_))
+    ));
+    assert!(root.join("profiles/custom.toml").is_file());
+
+    fs::remove_file(root.join("profiles/custom.toml")).unwrap();
+    fs::write(root.join("history/activations/record"), b"history").unwrap();
+    assert!(init_welcome(&paths).is_err());
+    assert_eq!(fs::read_to_string(root.join("config.toml")).unwrap(), old);
 }
 
 #[test]

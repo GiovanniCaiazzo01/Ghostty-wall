@@ -54,9 +54,6 @@ assert_occurrences() {
 run_syntax_checks() {
   bash -n "$REPO_ROOT/bin/ghostty-wall"
   bash -n "$REPO_ROOT/scripts/install.sh"
-  bash -n "$REPO_ROOT/scripts/mac/install-mac.sh"
-  bash -n "$REPO_ROOT/scripts/linux/install-linux.sh"
-  bash -n "$REPO_ROOT/scripts/uninstall.sh"
 }
 
 run_cli_tests() {
@@ -646,139 +643,6 @@ run_missing_command_test() {
   rm -rf "$temp_home"
 }
 
-run_installer_tests() {
-  local temp_home temp_prefix temp_local_prefix temp_config profile_file output curl_fail curl_success temp_home_zsh temp_config_zsh temp_success_home temp_success_config temp_success_prefix
-
-  temp_home="$(mktemp_dir)"
-  temp_prefix="$(mktemp_dir)"
-  temp_local_prefix="$temp_home/.local"
-  temp_config="$temp_home/config"
-  profile_file="$temp_home/profile"
-  mkdir -p "$temp_config"
-
-  HOME="$temp_home" \
-  XDG_CONFIG_HOME="$temp_config" \
-  INSTALL_PREFIX="$temp_prefix" \
-  PROFILE_FILE="$profile_file" \
-  GHOSTTY_WALL_DISABLE_FIRST_RUN=1 \
-    bash "$REPO_ROOT/scripts/install.sh"
-
-  assert_executable "$temp_prefix/bin/ghostty-wall"
-  assert_file "$temp_config/ghostty/wallpaper_repos.txt"
-  assert_contains "$temp_config/ghostty/install-path" "$temp_prefix/bin/ghostty-wall"
-
-  printf '%s\n' 'keep|owner/repo|main|' > "$temp_config/ghostty/wallpaper_repos.txt"
-  curl_fail="$temp_home/curl-fail.sh"
-  cat >"$curl_fail" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-  chmod +x "$curl_fail"
-
-  HOME="$temp_home" \
-  XDG_CONFIG_HOME="$temp_config" \
-  INSTALL_PREFIX="$temp_prefix" \
-  PROFILE_FILE="$profile_file" \
-  CURL_BIN="$curl_fail" \
-    bash "$REPO_ROOT/scripts/install.sh" >"$temp_home/install.out" 2>&1
-  output="$(< "$temp_home/install.out")"
-  assert_output_contains "$output" "Warning: initial wallpaper setup did not complete"
-  assert_contains "$temp_config/ghostty/wallpaper_repos.txt" "keep|owner/repo|main|"
-
-  temp_success_home="$(mktemp_dir)"
-  temp_success_config="$temp_success_home/config"
-  temp_success_prefix="$(mktemp_dir)"
-  mkdir -p "$temp_success_config"
-  curl_success="$temp_success_home/curl-success.sh"
-  cat >"$curl_success" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-output_file=""
-url=""
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -o)
-      output_file="$2"
-      shift 2
-      ;;
-    -w)
-      shift 2
-      ;;
-    http://*|https://*)
-      url="$1"
-      shift
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-
-case "$url" in
-  *api.github.com* )
-    printf '[{"download_url":"https://example.com/install.jpg"}]\n' >"$output_file"
-    printf '200'
-    ;;
-  *example.com/install.jpg* )
-    printf 'fake image data\n' >"$output_file"
-    ;;
-  * )
-    printf 'unexpected url: %s\n' "$url" >&2
-    exit 1
-    ;;
-esac
-EOF
-  chmod +x "$curl_success"
-
-  HOME="$temp_success_home" \
-  XDG_CONFIG_HOME="$temp_success_config" \
-  INSTALL_PREFIX="$temp_success_prefix" \
-  CURL_BIN="$curl_success" \
-  GHOSTTY_WALL_OS_TYPE='Linux' \
-    bash "$REPO_ROOT/scripts/install.sh" >"$temp_success_home/install-success.out" 2>&1
-  assert_file "$temp_success_config/ghostty/wallpaper.conf"
-  assert_contains "$temp_success_config/ghostty/config" "config-file = $temp_success_config/ghostty/wallpaper.conf"
-
-  HOME="$temp_home" \
-  XDG_CONFIG_HOME="$temp_config" \
-  INSTALL_PREFIX="$temp_local_prefix" \
-  PROFILE_FILE="$profile_file" \
-  PATH="/usr/bin:/bin" \
-  GHOSTTY_WALL_DISABLE_FIRST_RUN=1 \
-    bash "$REPO_ROOT/scripts/install.sh"
-  assert_occurrences "$profile_file" "export PATH=\"\$HOME/.local/bin:\$PATH\"" 1
-
-  temp_home_zsh="$(mktemp_dir)"
-  temp_config_zsh="$temp_home_zsh/config"
-  mkdir -p "$temp_config_zsh"
-  HOME="$temp_home_zsh" \
-  SHELL='/bin/zsh' \
-  XDG_CONFIG_HOME="$temp_config_zsh" \
-  INSTALL_PREFIX="$temp_home_zsh/.local" \
-  PATH="/usr/bin:/bin" \
-  GHOSTTY_WALL_DISABLE_FIRST_RUN=1 \
-    bash "$REPO_ROOT/scripts/install.sh"
-  assert_file "$temp_home_zsh/.zshrc"
-  assert_occurrences "$temp_home_zsh/.zshrc" "export PATH=\"\$HOME/.local/bin:\$PATH\"" 1
-
-  HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" INSTALL_PREFIX="$temp_prefix" bash "$REPO_ROOT/scripts/uninstall.sh"
-  [ ! -e "$temp_prefix/bin/ghostty-wall" ] || fail "expected uninstall to remove installed binary"
-
-  HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" bash "$REPO_ROOT/scripts/uninstall.sh"
-  [ ! -e "$temp_local_prefix/bin/ghostty-wall" ] || fail "expected uninstall to remove recorded install binary"
-  [ ! -e "$temp_config/ghostty/install-path" ] || fail "install path state file should be removed"
-
-  printf '%s\n' "$temp_home/missing/bin/ghostty-wall" > "$temp_config/ghostty/install-path"
-  HOME="$temp_home" XDG_CONFIG_HOME="$temp_config" bash "$REPO_ROOT/scripts/uninstall.sh"
-  [ ! -e "$temp_config/ghostty/install-path" ] || fail "stale install path state file should be removed"
-
-  HOME="$temp_success_home" XDG_CONFIG_HOME="$temp_success_config" INSTALL_PREFIX="$temp_success_prefix" bash "$REPO_ROOT/scripts/uninstall.sh"
-
-  rm -rf "$temp_home" "$temp_prefix" "$temp_home_zsh" "$temp_success_home" "$temp_success_prefix"
-}
-
 run_syntax_checks
 run_cli_tests
 run_runtime_tests
@@ -788,6 +652,5 @@ run_download_failure_test
 run_linux_reload_tests
 run_macos_reload_tests
 run_missing_command_test
-run_installer_tests
 
 printf 'All tests passed.\n'

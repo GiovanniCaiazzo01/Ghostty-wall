@@ -12,7 +12,7 @@ For the current Bash v0 implementation:
 
 ```sh
 bash scripts/test.sh
-shellcheck -x bin/ghostty-wall scripts/install.sh scripts/install-v1.sh scripts/mac/install-mac.sh scripts/linux/install-linux.sh scripts/uninstall.sh scripts/test.sh scripts/integration-test.sh
+shellcheck -x bin/ghostty-wall scripts/install.sh scripts/test.sh scripts/integration-test.sh
 ```
 
 For Rust changes after `Cargo.toml` exists:
