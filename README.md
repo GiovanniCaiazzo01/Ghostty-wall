@@ -1,364 +1,219 @@
-<img width="720" height="720" alt="ghostty-wall" src="https://github.com/user-attachments/assets/ec3d60f0-bf60-49fb-a417-34c87f14adf5" />
+# Ghostty Wall
 
+Ghostty Wall v1 is a Rust CLI for reproducible Ghostty visual Environments. Profiles resolve wallpaper Sources, colors, and supported terminal settings into immutable Environments with durable local History.
 
-# ghostty-wall
+Linux support is stable. macOS support is **experimental** pending real-system verification in issue 14. Windows is unsupported.
 
-A tiny CLI that sets a random wallpaper for [Ghostty](https://github.com/ghostty-org/ghostty) by picking an image from a list of GitHub repositories.
-It runs on macOS and Linux, and auto-wires your Ghostty config on first run.
+## Install
 
-> **Scope:** Ghostty only. The script is tailored to Ghostty's config and does not target other terminals.
+### Linux release artifact
 
----
-
-## ✨ Features
-
-* Randomly pick an image from one of several GitHub repos (you control the list)
-* Writes a small include file (`$XDG_CONFIG_HOME/ghostty/wallpaper.conf`, default `~/.config/ghostty/wallpaper.conf`) and ensures it’s included in Ghostty’s main config
-* Tries to reload Ghostty automatically on macOS, and on Linux when Ghostty is running via its documented systemd user service
-* Minimal dependencies (Bash 3.2, curl)
-* GitHub token support to avoid API rate limits
-
----
-
-## 📦 What gets installed & where
-
-Running the installer will:
-
-1. **Install the CLI** `ghostty-wall` into a global binary directory:
-
-   * `/opt/homebrew/bin` (Apple Silicon Homebrew), or
-   * `/usr/local/bin` (Intel/Homebrew), or
-   * `~/.local/bin` (fallback if neither Homebrew path exists)
-
-2. **Ensure your Ghostty config directory** exists at:
-
-   * `${XDG_CONFIG_HOME:-$HOME/.config}/ghostty`
-
-3. **Create default config files** if they don’t exist:
-
-    * `~/.config/ghostty/wallpaper_repos.txt` — your list of repos to pull images from
-
-4. **Run `ghostty-wall` once** so that, when GitHub access and repo configuration are valid:
-
-    * a wallpaper gets downloaded to `${TMPDIR:-/tmp}/anime_wallpapers/current_wallpaper.<ext>`
-    * `~/.config/ghostty/wallpaper.conf` is created
-    * `$XDG_CONFIG_HOME/ghostty/config` gains an include line (if missing):
-      `config-file = /absolute/path/to/ghostty/wallpaper.conf`
-
-> Temporary images live in `${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}`.
-
----
-
-## ✅ Requirements
-
-* macOS or Linux
-* [Ghostty](https://github.com/ghostty-org/ghostty) installed
-* `curl` available
-* Optional: `GITHUB_TOKEN` to raise rate limits for GitHub API
-
----
-
-## 🚀 Quick Start
+Download `ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz` and its `.sha256` file from the GitHub Release, then:
 
 ```bash
-# from the repo root
-./scripts/install.sh
-
-# then simply:
-ghostty-wall
+sha256sum --check ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
+cd ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu
+./install-v1.sh
 ```
 
-This will:
-
-* Create/prepare your Ghostty config
-* Download a random image
-* Attempt to reload Ghostty automatically if it's open on macOS, or via the Ghostty systemd user service on Linux when available
-* You’ll see log messages in your terminal
-
-## 🏷️ GitHub Releases
-
-For now, releases are source-only.
-
-1. Open the latest release on GitHub and download the source archive (`.zip` or `.tar.gz`).
-2. Extract it locally.
-3. Run from the extracted project root:
+Default destination is `~/.local/bin/ghostty-wall`. Set `INSTALL_PREFIX` to choose another prefix:
 
 ```bash
-./scripts/install.sh
+INSTALL_PREFIX=/usr/local ./install-v1.sh
 ```
 
-Notes:
+### Build from source
 
-* Release assets do not currently include prebuilt binaries.
-* The normal CI workflow currently runs on Ubuntu only.
-* macOS support is still validated manually before releases.
-* Ongoing release history lives in [`CHANGELOG.md`](./CHANGELOG.md).
-
----
-
-## 🧩 Repository Layout
-
-```
-ghostty-wall/
-├─ .github/
-│  └─ workflows/
-│     ├─ ci.yml
-│     └─ integration.yml
-├─ bin/
-│  └─ ghostty-wall
-├─ docs/
-│  ├─ release-checklist.md
-│  └─ release-notes-template.md
-├─ scripts/
-│  ├─ install.sh
-│  ├─ integration-test.sh
-│  ├─ uninstall.sh
-│  ├─ test.sh
-│  ├─ linux/
-│  │  └─ install-linux.sh
-│  └─ mac/
-│     └─ install-mac.sh
-├─ examples/
-│  └─ wallpaper_repos.example.txt
-├─ CHANGELOG.md
-├─ README.md
-├─ LICENSE
-└─ .gitignore
-```
-
----
-
-## 🛠️ Installation (details)
+Rust 1.85 or newer is required for edition 2024.
 
 ```bash
-./scripts/install.sh
+git clone https://github.com/GiovanniCaiazzo01/Ghostty-wall.git
+cd Ghostty-wall
+./scripts/install-v1.sh
 ```
 
-The installer:
+Installer builds with `cargo build --locked --release` when no release binary is present. On macOS it prints an experimental-support warning.
 
-* Detects an install prefix:
-  * macOS: `/opt/homebrew`, `/usr/local`, or `~/.local`
-  * Linux: `/usr/local` or `~/.local`
-* Installs `bin/ghostty-wall` into `<prefix>/bin/ghostty-wall`
-* Creates `$XDG_CONFIG_HOME/ghostty/` if necessary (default `~/.config/ghostty/`)
-* Seeds `$XDG_CONFIG_HOME/ghostty/wallpaper_repos.txt` from `examples/wallpaper_repos.example.txt` if missing
-* Executes `ghostty-wall` once to generate and wire `wallpaper.conf`
-* Prints a warning instead of pretending success if the first wallpaper fetch fails
+## First workflow
 
-**PATH note:**
-If the installer falls back to `~/.local/bin`, it will append that directory to your shell profile. Open a new terminal or `source` your profile to pick it up.
-
----
-
-## 🧪 Usage
+Initialize Managed Root and one optional Ghostty Integration Hook:
 
 ```bash
-ghostty-wall                 # one-off: pick repo+image and reload Ghostty when supported
-ghostty-wall --list          # show the repo list file
-ghostty-wall --add "name|owner/repo|branch|path"
-ghostty-wall --remove <name>
-ghostty-wall --help
+ghostty-wall init --dry-run
+ghostty-wall init
 ```
 
-## ✅ Confidence Ladder
+Linux Managed Root:
 
-1. Run `bash scripts/test.sh` for deterministic local and CI coverage.
-2. Run `bash scripts/integration-test.sh` to verify the live GitHub API and image download path.
-3. Trigger the `Integration` workflow in GitHub Actions when you want the live integration test on a clean runner.
-4. Follow `docs/release-checklist.md` before a release to cover Ubuntu CI, manual macOS validation, and real Ghostty behavior.
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/ghostty-wall
+```
 
-**Examples**
+Create local Source in `config.toml`:
 
-Add a repository:
+```toml
+schema_version = 1
+
+[sources.wallpapers]
+kind = "local-directory"
+path = "~/Pictures/wallpapers"
+```
+
+Create `profiles/night.toml`:
+
+```toml
+schema_version = 1
+
+[wallpaper]
+mode = "source"
+source = "wallpapers"
+selection = "path"
+path = "city/night.png"
+fit = "cover"
+position = "center"
+opacity = 0.12
+
+[colors]
+mode = "generated"
+
+[terminal]
+font_size = 13.5
+background_opacity = 0.94
+cursor_style = "bar"
+```
+
+Plan without mutation, apply, inspect health, then navigate History:
 
 ```bash
-ghostty-wall --add "k1ngwalls|k1ng440/Wallpapers|master|wallpapers"
+ghostty-wall plan night --json
+ghostty-wall apply night
+ghostty-wall doctor
+ghostty-wall previous
 ```
 
-Remove a repository by name:
+`apply` commits Asset, Environment, Projection, and Activation before attempting best-effort Ghostty reload. Reload failure never rolls back committed state.
+
+## Profiles
+
+Profiles live at `profiles/<profile-id>.toml`. Supported v1 inputs:
+
+- local-directory and commit-pinned GitHub wallpaper Sources;
+- fixed-path or explicit-seed `random-v1` Selection;
+- unmanaged, disabled, or managed wallpaper;
+- explicit colors, named Ghostty themes, or deterministic `kmeans-v1` generated colors;
+- supported font size, opacity, blur, and cursor fields.
+
+Random Selection requires explicit 32-byte hexadecimal seed:
 
 ```bash
-ghostty-wall --remove k1ngwalls
+ghostty-wall plan rotating --seed 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f --json
+ghostty-wall apply rotating --seed 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 ```
 
-List current repositories:
+GitHub Sources use `GITHUB_TOKEN` when set. Tokens remain transport-only and are never persisted in Plans, Intent, History, logs, or diagnostics.
+
+### Generated colors
+
+Generated colors require managed source wallpaper:
+
+```toml
+[wallpaper]
+mode = "source"
+source = "wallpapers"
+selection = "path"
+path = "city/night.png"
+
+[colors]
+mode = "generated"
+```
+
+Resolved colors become Environment content. Algorithm provenance stays in Plan and Activation metadata.
+
+### Named Ghostty theme
+
+```toml
+[colors]
+mode = "theme"
+theme = "TokyoNight"
+```
+
+Ghostty Wall resolves theme into managed colors before commit, so replay does not depend on theme file remaining installed.
+
+## Terminal browser
 
 ```bash
-ghostty-wall --list
-```
----
-
-## ⚙️ Configuration
-
-### Ghostty include (auto-managed)
-
-* File: `$XDG_CONFIG_HOME/ghostty/wallpaper.conf` (default `~/.config/ghostty/wallpaper.conf`)
-  Example content (auto-written):
-
-  ```ini
-  background-image=${TMPDIR:-/tmp}/anime_wallpapers/current_wallpaper.jpg
-  background-image-fit=cover
-  background-image-position=center
-  background-image-opacity=0.1
-  ```
-* The tool ensures `$XDG_CONFIG_HOME/ghostty/config` contains:
-  `config-file = /absolute/path/to/ghostty/wallpaper.conf`
-  (If the line is missing, it will append it.)
-
-### Repo list format
-
-* File: `$XDG_CONFIG_HOME/ghostty/wallpaper_repos.txt` (default `~/.config/ghostty/wallpaper_repos.txt`)
-* Format: one repo per line as `name|owner/repo|branch|path`
-
-  * `name`: an arbitrary label you choose
-  * `owner/repo`: the GitHub repository
-  * `branch`: e.g., `main` or `master` (if empty in the file, the script defaults to `main`)
-  * `path`: subfolder under the repo that contains images (optional; can be empty)
-
-**Example:**
-
-```txt
-# name|owner/repo|branch|path
-anime|ThePrimeagen/anime|master|
-k1ngwalls|k1ng440/Wallpapers|master|wallpapers
+ghostty-wall tui
+# Random Profiles:
+ghostty-wall tui --seed 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 ```
 
-**Supported image extensions:** `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp` (case-insensitive)
+Commands are `j`, `k`, `tab`, `enter`, `a`, `b`, and `q`, each followed by Enter. Preview uses Ghostty's Kitty graphics protocol when available and falls back to text. TUI planning and apply use same application services as CLI commands.
 
----
+## Migrate Bash v0
 
-## 🌍 Environment Variables
-
-* `GITHUB_TOKEN` — optional; if set, the script adds an Authorization header to avoid GitHub API rate limits
-
-* `GHOSTTY_WALL_TEMP_DIR` — optional; overrides where downloaded images are stored
-
-* `TMPDIR` — used as the base temporary directory when `GHOSTTY_WALL_TEMP_DIR` is not set
-
-  ```bash
-  export GITHUB_TOKEN=ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXX
-  ```
-
----
-
-## 🧰 How it works (under the hood)
-
-1. Reads (or creates) `$XDG_CONFIG_HOME/ghostty/wallpaper_repos.txt`
-2. Picks a random repo line and constructs:
-
-   * a GitHub **API URL** to list files in the specified repo/path/branch
-3. Filters the file list for image extensions
-4. Randomly selects one image and downloads it to:
-
-   * `${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}/current_wallpaper.<ext>`
-5. Writes/updates `$XDG_CONFIG_HOME/ghostty/wallpaper.conf` to point to that file
-6. Ensures `$XDG_CONFIG_HOME/ghostty/config` includes the `wallpaper.conf`
-7. If Ghostty is running on macOS, attempts a reload via AppleScript (Cmd+Shift+,)
-8. If Ghostty is running on Linux via `app-com.mitchellh.ghostty.service`, attempts a reload via `systemctl --user reload app-com.mitchellh.ghostty.service`
-
----
-
-## 🧹 Uninstall
-
-Remove the CLI (config files are left in place):
+Migration is explicit, idempotent, and preserves all legacy files:
 
 ```bash
-./scripts/uninstall.sh
+ghostty-wall init --migrate-legacy --dry-run
+ghostty-wall init --migrate-legacy
 ```
 
-(Optional) Clean temporary wallpapers and the include:
+Recognized `wallpaper_repos.txt` entries become v1 GitHub Sources. Migration removes only strictly recognized legacy Integration Hooks after v1 state is valid. Review imported Sources, then create Profiles manually; migration cannot infer Profile intent.
+
+Bash v0 remains available from repository tag [`v0.2.2`](https://github.com/GiovanniCaiazzo01/Ghostty-wall/tree/v0.2.2). Existing v0 users can stay pinned while validating v1 migration.
+
+## Uninstall
+
+First remove v1 Integration Hooks and disposable Projection/cache while preserving Intent, Profiles, Assets, Environments, and History:
 
 ```bash
-rm -rf "${GHOSTTY_WALL_TEMP_DIR:-${TMPDIR:-/tmp}/anime_wallpapers}"
-rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/wallpaper.conf"
-# (and remove the include line from "${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/config" if you want)
+ghostty-wall uninstall
 ```
 
----
-
-## 🛡️ Security & Privacy
-
-* No telemetry.
-* Uses GitHub’s public API to list files and raw.githubusercontent.com to download images.
-* If `GITHUB_TOKEN` is provided, it is used only for GitHub API authentication headers.
-
----
-
-## 🪪 Compatibility & Limitations
-
-* Ghostty only
-* Online sources only (GitHub repos); local folders are not supported at this time
-* Automatic Ghostty reload on Linux requires Ghostty's documented systemd user service (`app-com.mitchellh.ghostty.service`)
-* If your Ghostty config is in a non-standard location, ensure `$XDG_CONFIG_HOME/ghostty/config` exists or symlink it
-
----
-
-## ❓ FAQ
-
-**Q: “Command not found” after install?**
-A: If the installer used `~/.local/bin`, open a new terminal or source the profile the installer updated. On macOS that is typically `~/.zshrc` or `~/.bash_profile`; on Linux it is typically `~/.bashrc` or `~/.profile`.
-
-**Q: Ghostty didn’t reload.**
-A: On macOS, make sure Ghostty is running and accessibility permissions allow automation (System Settings → Privacy & Security → Automation/Accessibility). On Linux, automatic reload only works when Ghostty is managed by its documented systemd user service, `app-com.mitchellh.ghostty.service`. If that service is installed but inactive, or unavailable for your installation method, press `Ctrl+Shift+,` in Ghostty or restart it. If you want Linux automatic reload, check the Ghostty Linux/systemd documentation for the supported setup on your system. The tool will still apply the wallpaper on Ghostty’s next launch.
-
-**Q: How do I enable automatic reload on Linux?**
-A: `ghostty-wall` only uses Ghostty's documented Linux reload path: `systemctl --user reload app-com.mitchellh.ghostty.service`. This means Ghostty must be running through that documented systemd user service. Check the Ghostty Linux/systemd docs for your installation method, then verify the service with `systemctl --user is-active app-com.mitchellh.ghostty.service`.
-
-**Q: GitHub API rate-limited me.**
-A: Export a `GITHUB_TOKEN` (a classic Personal Access Token is enough for public repos).
-
-**Q: My repo shows “No images found”.**
-A: Double-check `branch` and `path`. The `path` should be relative to the repo root; leave it blank to use the root. If one repo is misconfigured, `ghostty-wall` will try the next configured repo automatically.
-
-**Q: Install finished with a warning about initial wallpaper setup.**
-A: The CLI was installed, but the first wallpaper fetch failed. Check network access, `curl`, and your repo list, then run `ghostty-wall` manually.
-
-**Q: Can I control opacity/fit/position?**
-A: Edit `${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/wallpaper.conf` to tweak:
-
-```ini
-background-image-fit=cover
-background-image-position=center
-background-image-opacity=0.1
-```
-
----
-
-## 🤝 Contributing
-
-Issues and PRs are welcome! Ideas:
-
-* Local folder support
-* More image providers
-* Configurable filters (file size, resolution)
-* Homebrew formula/tap
-
----
-
-## 📜 License
-
-MIT — see [`LICENSE`](./LICENSE).
-
----
-
-## 🧾 Changelog
-
-See [`CHANGELOG.md`](./CHANGELOG.md) for project history and [`docs/release-notes-template.md`](./docs/release-notes-template.md) for the GitHub Release notes template.
-
----
-
-## 🧭 Appendix: Example session
+Then remove binary using installation method:
 
 ```bash
-# 1) Install
-./scripts/install.sh
-
-# 2) List current repos
-ghostty-wall --list
-
-# 3) Add your favorite repo/path
-ghostty-wall --add "mycats|myuser/mycats|main|images/wallpapers"
-
-# 4) Rotate now
-ghostty-wall
+rm "$HOME/.local/bin/ghostty-wall"       # default install-v1.sh destination
+cargo uninstall ghostty-wall              # cargo install
 ```
+
+There is no destructive `--purge` in v1. Reinstall plus `ghostty-wall init` recognizes preserved state.
+
+## Platform support
+
+### Linux — stable
+
+- Managed Root under XDG Ghostty config.
+- Runtime reload through documented `app-com.mitchellh.ghostty.service` systemd user service.
+- Tagged releases publish x86_64 GNU/Linux binary archive and SHA-256 checksum.
+- Source builds remain available for other Linux architectures.
+
+### macOS — experimental
+
+- Managed Root under `~/Library/Application Support/com.mitchellh.ghostty/ghostty-wall`.
+- Reload through Ghostty AppleScript `perform action "reload_config"` API.
+- Automated adapter tests verify running, unavailable, probe-failure, and reload-failure outcomes without changing durable Activation success.
+- Real Ghostty smoke-test procedure is in [`docs/release-checklist.md`](docs/release-checklist.md); real-system promotion remains issue 14.
+
+## Verification
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+bash scripts/test.sh
+shellcheck -x bin/ghostty-wall scripts/*.sh scripts/linux/*.sh scripts/mac/*.sh
+```
+
+Live GitHub test is separate:
+
+```bash
+cargo test --test github_live -- --ignored
+```
+
+See [`docs/release-checklist.md`](docs/release-checklist.md), [`CHANGELOG.md`](CHANGELOG.md), and accepted contracts under [`docs/rfc/`](docs/rfc/).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
