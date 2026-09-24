@@ -183,6 +183,17 @@ Only Git tree modes `100644` and `100755` are regular-file candidates. Mode `120
 
 A truncated recursive Git Trees response is not a complete enumeration and MUST NOT be used to construct a Candidate Set. The adapter MUST either traverse trees non-recursively until enumeration is complete or return an explicit Source resolution error.
 
+GitHub Source failures extend the RFC 0005 Error Response registry with these category `resolution` codes, each containing exactly `source_id` in addition to `category` and `code`:
+
+```text
+source.github-authentication-failed
+source.github-rate-limited
+source.github-unavailable
+source.github-incomplete-tree
+```
+
+These errors MUST NOT contain requested refs, credentials, URLs, headers, response bodies, or transport details. `source.github-incomplete-tree` is emitted only when enumeration cannot prove complete membership.
+
 The resolved commit is Source revision provenance. It does not participate in Candidate Set identity.
 
 ## Local-directory Source resolution

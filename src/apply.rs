@@ -15,10 +15,12 @@ use crate::{
         ActivationId, ConfigIntent, EnvironmentId, IntentId, MAX_ACTIVATION_SEQUENCE,
         ProfileIntent, ResolutionSeed,
     },
+    github::GithubApi,
     history::{HistoryError, inspect_history_unlocked, timestamp_valid},
     plan::{
         PlanError, PlanPlatform, ReloadObservation, ReloadUnavailableReason, asset_disposition,
-        environment_disposition, plan_local_profile_json, planned_local_asset_bytes,
+        environment_disposition, plan_github_profile_json, plan_local_profile_json,
+        planned_github_asset_bytes, planned_local_asset_bytes,
     },
     recovery::{
         RecoveryError, exclusive_state_lock, inspect_integration_hook,
@@ -113,7 +115,72 @@ where
         &platform,
     )?;
     let asset_bytes = planned_local_asset_bytes(&plan)?;
+    apply_resolved_profile(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        reload,
+        plan,
+        asset_bytes,
+    )
+}
 
+/// Resolve and durably apply one Profile through a commit-pinned GitHub adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_github_profile<F, E>(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    effective_root_config: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&ResolutionSeed>,
+    activated_at: &str,
+    github: &dyn GithubApi,
+    reload: F,
+) -> Result<ApplyOutcome, ApplyError>
+where
+    F: FnOnce() -> Result<(), E>,
+{
+    validate_timestamp(activated_at)?;
+    let platform = PlanPlatform::new(
+        effective_root_config.to_owned(),
+        ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
+    );
+    let plan = plan_github_profile_json(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        &platform,
+        github,
+    )?;
+    let asset_bytes = planned_github_asset_bytes(&plan, github)?;
+    apply_resolved_profile(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        reload,
+        plan,
+        asset_bytes,
+    )
+}
+
+fn apply_resolved_profile<F, E>(
+    managed_root: &Path,
+    effective_root_config: &Path,
+    activated_at: &str,
+    reload: F,
+    plan: Value,
+    asset_bytes: Option<Vec<u8>>,
+) -> Result<ApplyOutcome, ApplyError>
+where
+    F: FnOnce() -> Result<(), E>,
+{
     let lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
     inspect_integration_hook(effective_root_config, &managed_root.join("current.ghostty"))?;
     let history = inspect_history_unlocked(managed_root)?;

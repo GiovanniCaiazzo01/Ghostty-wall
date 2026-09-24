@@ -1,4 +1,4 @@
-//! Read-only Profile planning for local Sources.
+//! Read-only Profile planning and Source resolution.
 
 use std::{
     fs,
@@ -17,8 +17,9 @@ use crate::{
     domain::{
         CandidatePath, CandidateSet, ColorsIntent, ColorsManifest, ConfigIntent,
         EnvironmentManifest, ImageWallpaper, IntentId, MediaType, ProfileIntent, Sha256Digest,
-        SourceIntent, TerminalManifest, WallpaperIntent, WallpaperSelection,
+        SourceIntent, SourcePath, TerminalManifest, WallpaperIntent, WallpaperSelection,
     },
+    github::{GithubApi, GithubApiError, GithubEntryKind},
     recovery::{RecoveryError, inspect_recovery_state},
     selection::{RandomSelectionError, select_random_v1},
 };
@@ -62,6 +63,19 @@ pub enum ReloadUnavailableReason {
     GhosttyIntegrationUnavailable,
 }
 
+/// Safe classification of a GitHub Source resolution failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubResolutionError {
+    /// Authentication was absent, invalid, or insufficient.
+    Authentication,
+    /// GitHub rate limit was exhausted.
+    RateLimited,
+    /// GitHub could not return a usable response.
+    Unavailable,
+    /// Recursive tree response omitted Candidate membership.
+    IncompleteTree,
+}
+
 /// Planning failure.
 #[derive(Debug, Error)]
 pub enum PlanError {
@@ -83,6 +97,14 @@ pub enum PlanError {
     /// Candidate set drifted during local planning.
     #[error("local Source changed during planning")]
     SourceDrift,
+    /// GitHub Source could not be resolved completely.
+    #[error("GitHub Source {source_id} resolution failed: {kind:?}")]
+    Github {
+        /// Source identifier safe for public diagnostics.
+        source_id: String,
+        /// Credential-free failure kind.
+        kind: GithubResolutionError,
+    },
     /// Filesystem read failed.
     #[error("filesystem error at {path}: {source}")]
     Io {
@@ -131,6 +153,16 @@ impl PlanError {
             }),
             Self::SourceDrift => json!({
                 "category": "resolution", "code": "source.changed-during-planning"
+            }),
+            Self::Github { source_id, kind } => json!({
+                "category": "resolution",
+                "code": match kind {
+                    GithubResolutionError::Authentication => "source.github-authentication-failed",
+                    GithubResolutionError::RateLimited => "source.github-rate-limited",
+                    GithubResolutionError::Unavailable => "source.github-unavailable",
+                    GithubResolutionError::IncompleteTree => "source.github-incomplete-tree",
+                },
+                "source_id": source_id,
             }),
             Self::Io { path, .. } => json!({
                 "category": "resolution",
@@ -217,7 +249,7 @@ pub fn plan_local_profile_json_uninspected(
     profile: &ProfileIntent,
     seed: Option<&crate::domain::ResolutionSeed>,
 ) -> Result<Value, PlanError> {
-    plan_local_profile_json_inner(
+    plan_profile_json_inner(
         config_dir,
         home,
         managed_root,
@@ -226,6 +258,32 @@ pub fn plan_local_profile_json_uninspected(
         profile,
         seed,
         None,
+        None,
+    )
+}
+
+/// Resolves Profile JSON with a deterministic GitHub adapter, without Recovery inspection.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_github_profile_json_uninspected(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    github: &dyn GithubApi,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        None,
+        Some(github),
     )
 }
 
@@ -241,7 +299,7 @@ pub fn plan_local_profile_json(
     seed: Option<&crate::domain::ResolutionSeed>,
     platform: &PlanPlatform,
 ) -> Result<Value, PlanError> {
-    plan_local_profile_json_inner(
+    plan_profile_json_inner(
         config_dir,
         home,
         managed_root,
@@ -250,11 +308,38 @@ pub fn plan_local_profile_json(
         profile,
         seed,
         Some(platform),
+        None,
+    )
+}
+
+/// Produces complete RFC 0005 Plan JSON with GitHub Source support.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_github_profile_json(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    platform: &PlanPlatform,
+    github: &dyn GithubApi,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        Some(platform),
+        Some(github),
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn plan_local_profile_json_inner(
+fn plan_profile_json_inner(
     config_dir: &Path,
     home: &Path,
     managed_root: &Path,
@@ -263,6 +348,7 @@ fn plan_local_profile_json_inner(
     profile: &ProfileIntent,
     seed: Option<&crate::domain::ResolutionSeed>,
     platform: Option<&PlanPlatform>,
+    github: Option<&dyn GithubApi>,
 ) -> Result<Value, PlanError> {
     if seed.is_some()
         && !matches!(
@@ -303,71 +389,32 @@ fn plan_local_profile_json_inner(
                 .find(|(id, _)| id == source)
                 .map(|(_, source)| source)
                 .ok_or_else(|| PlanError::UnknownSource(source.to_string()))?;
-            let SourceIntent::LocalDirectory { path } = source_intent else {
-                return Err(PlanError::Unsupported(
-                    "only local-directory Sources implemented",
-                ));
+            let resolved = match source_intent {
+                SourceIntent::LocalDirectory { path } => resolve_local_source(
+                    config_dir,
+                    home,
+                    source,
+                    path,
+                    selection,
+                    seed,
+                    &mut diagnostics,
+                )?,
+                SourceIntent::Github {
+                    repository,
+                    reference,
+                    path,
+                } => resolve_github_source(
+                    source,
+                    repository,
+                    reference.as_deref(),
+                    path.as_ref(),
+                    selection,
+                    seed,
+                    github.ok_or(PlanError::Unsupported("GitHub adapter unavailable"))?,
+                )?,
             };
-            let root = resolve_local_root(config_dir, home, path)?;
-            let root_file = open_source_root(&root)?;
-            let (selected_index, candidate, selection_json) = match selection {
-                WallpaperSelection::Random => {
-                    let seed = seed.ok_or(PlanError::MissingSeed)?;
-                    let (before, skipped) = enumerate_candidates(&root, &root_file)?;
-                    if skipped > 0 {
-                        diagnostics.push(json!({
-                            "code": "source.skipped-non-utf8-entries",
-                            "severity": "warning",
-                            "source_id": source.as_str(),
-                            "count": skipped,
-                        }));
-                    }
-                    let (index, candidate) =
-                        select_random_v1(&before, seed).map_err(|error| match error {
-                            RandomSelectionError::EmptyCandidateSet => {
-                                PlanError::EmptyCandidateSet(source.to_string())
-                            }
-                            other => PlanError::Selection(other),
-                        })?;
-                    let fp = fingerprint(&before);
-                    (
-                        Some(index),
-                        candidate.clone(),
-                        json!({
-                            "kind": "random",
-                            "algorithm": "random-v1",
-                            "seed": seed.to_string(),
-                            "candidate_set_fingerprint": fp.to_string(),
-                            "candidate_count": before.len(),
-                            "selected_index": index,
-                            "candidate": candidate.as_str(),
-                        }),
-                    )
-                }
-                WallpaperSelection::Path(path) => {
-                    if !eligible(Path::new(path.as_str())) {
-                        return Err(PlanError::Unsupported(
-                            "Candidate path must have PNG or JPEG extension",
-                        ));
-                    }
-                    (
-                        None,
-                        path.clone(),
-                        json!({ "kind": "path", "candidate": path.as_str() }),
-                    )
-                }
-            };
-            let bytes = read_candidate(&root, &root_file, &candidate)?;
-            let media_type = detect_media_type(&bytes)?;
-            let asset_sha256 = sha256(&bytes);
-            if selected_index.is_some()
-                && fingerprint(&enumerate_candidates(&root, &root_file)?.0).to_string()
-                    != selection_json["candidate_set_fingerprint"]
-                        .as_str()
-                        .unwrap_or_default()
-            {
-                return Err(PlanError::SourceDrift);
-            }
+            let media_type = detect_media_type(&resolved.bytes)?;
+            let asset_sha256 = sha256(&resolved.bytes);
             let mut image = ImageWallpaper::new(asset_sha256, media_type);
             if let Some(value) = fit {
                 image = image.with_fit(*value);
@@ -383,17 +430,12 @@ fn plan_local_profile_json_inner(
             }
             (
                 Some(crate::domain::WallpaperManifest::Image(image)),
-                Some(json!({
-                    "id": source.as_str(),
-                    "kind": "local-directory",
-                    "configured_path": path,
-                    "resolved_root": root.display().to_string(),
-                })),
-                Some(selection_json),
+                Some(resolved.source),
+                Some(resolved.selection),
                 Some(json!({
                     "sha256": asset_sha256.to_string(),
                     "media_type": media_type.as_str(),
-                    "byte_length": bytes.len(),
+                    "byte_length": resolved.bytes.len(),
                 })),
             )
         }
@@ -490,6 +532,230 @@ fn plan_local_profile_json_inner(
     Ok(plan)
 }
 
+struct SourceResolution {
+    source: Value,
+    selection: Value,
+    bytes: Vec<u8>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_local_source(
+    config_dir: &Path,
+    home: &Path,
+    source_id: &IntentId,
+    configured_path: &str,
+    selection: &WallpaperSelection,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<SourceResolution, PlanError> {
+    let root = resolve_local_root(config_dir, home, configured_path)?;
+    let root_file = open_source_root(&root)?;
+    let (selected_index, candidate, selection_json) = match selection {
+        WallpaperSelection::Random => {
+            let seed = seed.ok_or(PlanError::MissingSeed)?;
+            let (before, skipped) = enumerate_candidates(&root, &root_file)?;
+            if skipped > 0 {
+                diagnostics.push(json!({
+                    "code": "source.skipped-non-utf8-entries",
+                    "severity": "warning",
+                    "source_id": source_id.as_str(),
+                    "count": skipped,
+                }));
+            }
+            let (index, candidate, selection) = random_selection(source_id, &before, seed)?;
+            (Some(index), candidate, selection)
+        }
+        WallpaperSelection::Path(path) => {
+            validate_candidate_extension(path)?;
+            (
+                None,
+                path.clone(),
+                json!({ "kind": "path", "candidate": path.as_str() }),
+            )
+        }
+    };
+    let bytes = read_candidate(&root, &root_file, &candidate)?;
+    if selected_index.is_some()
+        && fingerprint(&enumerate_candidates(&root, &root_file)?.0).to_string()
+            != selection_json["candidate_set_fingerprint"]
+                .as_str()
+                .unwrap_or_default()
+    {
+        return Err(PlanError::SourceDrift);
+    }
+    Ok(SourceResolution {
+        source: json!({
+            "id": source_id.as_str(),
+            "kind": "local-directory",
+            "configured_path": configured_path,
+            "resolved_root": root.display().to_string(),
+        }),
+        selection: selection_json,
+        bytes,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_github_source(
+    source_id: &IntentId,
+    repository: &str,
+    configured_ref: Option<&str>,
+    source_path: Option<&SourcePath>,
+    selection: &WallpaperSelection,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    github: &dyn GithubApi,
+) -> Result<SourceResolution, PlanError> {
+    let (reference, reference_kind) = match configured_ref {
+        Some(reference) => (reference.to_owned(), "configured"),
+        None => (
+            github
+                .default_branch(repository)
+                .map_err(|error| github_error(source_id, error))?,
+            "default-branch",
+        ),
+    };
+    let commit = github
+        .resolve_commit(repository, &reference)
+        .map_err(|error| github_error(source_id, error))?;
+    if !valid_github_commit(&commit) {
+        return Err(github_error(source_id, GithubApiError::Unavailable));
+    }
+
+    let (candidate, selection_json) = match selection {
+        WallpaperSelection::Random => {
+            let seed = seed.ok_or(PlanError::MissingSeed)?;
+            let tree = github
+                .tree(repository, &commit, true)
+                .map_err(|error| github_error(source_id, error))?;
+            if tree.truncated() {
+                return Err(PlanError::Github {
+                    source_id: source_id.to_string(),
+                    kind: GithubResolutionError::IncompleteTree,
+                });
+            }
+            let candidates = CandidateSet::new(tree.entries().iter().filter_map(|entry| {
+                if entry.kind() != GithubEntryKind::Blob
+                    || !matches!(entry.mode(), "100644" | "100755")
+                {
+                    return None;
+                }
+                let relative = github_relative_path(entry.path(), source_path)?;
+                let candidate = CandidatePath::from_str(relative).ok()?;
+                eligible(Path::new(candidate.as_str())).then_some(candidate)
+            }));
+            let (_, candidate, selection) = random_selection(source_id, &candidates, seed)?;
+            (candidate, selection)
+        }
+        WallpaperSelection::Path(path) => {
+            validate_candidate_extension(path)?;
+            (
+                path.clone(),
+                json!({ "kind": "path", "candidate": path.as_str() }),
+            )
+        }
+    };
+    let repository_path = github_repository_path(source_path, &candidate);
+    let bytes = github
+        .blob(repository, &commit, &repository_path)
+        .map_err(|error| github_error(source_id, error))?;
+    if bytes.len() as u64 > MAX_ASSET_BYTES {
+        return Err(github_error(source_id, GithubApiError::Unavailable));
+    }
+
+    let mut source = json!({
+        "id": source_id.as_str(),
+        "kind": "github",
+        "repository": repository,
+        "ref": { "kind": reference_kind, "value": reference },
+        "resolved_commit": commit,
+    });
+    if let Some(path) = source_path {
+        insert_optional(
+            &mut source,
+            "path",
+            Some(Value::String(path.as_str().to_owned())),
+        );
+    }
+    Ok(SourceResolution {
+        source,
+        selection: selection_json,
+        bytes,
+    })
+}
+
+fn random_selection(
+    source_id: &IntentId,
+    candidates: &CandidateSet,
+    seed: &crate::domain::ResolutionSeed,
+) -> Result<(usize, CandidatePath, Value), PlanError> {
+    let (index, candidate) = select_random_v1(candidates, seed).map_err(|error| match error {
+        RandomSelectionError::EmptyCandidateSet => {
+            PlanError::EmptyCandidateSet(source_id.to_string())
+        }
+        other => PlanError::Selection(other),
+    })?;
+    Ok((
+        index,
+        candidate.clone(),
+        json!({
+            "kind": "random",
+            "algorithm": "random-v1",
+            "seed": seed.to_string(),
+            "candidate_set_fingerprint": fingerprint(candidates).to_string(),
+            "candidate_count": candidates.len(),
+            "selected_index": index,
+            "candidate": candidate.as_str(),
+        }),
+    ))
+}
+
+fn validate_candidate_extension(candidate: &CandidatePath) -> Result<(), PlanError> {
+    if eligible(Path::new(candidate.as_str())) {
+        Ok(())
+    } else {
+        Err(PlanError::Unsupported(
+            "Candidate path must have PNG or JPEG extension",
+        ))
+    }
+}
+
+fn github_relative_path<'a>(
+    repository_path: &'a str,
+    source_path: Option<&SourcePath>,
+) -> Option<&'a str> {
+    match source_path {
+        Some(root) => repository_path
+            .strip_prefix(root.as_str())?
+            .strip_prefix('/'),
+        None => Some(repository_path),
+    }
+}
+
+fn github_repository_path(source_path: Option<&SourcePath>, candidate: &CandidatePath) -> String {
+    source_path.map_or_else(
+        || candidate.as_str().to_owned(),
+        |root| format!("{}/{}", root.as_str(), candidate.as_str()),
+    )
+}
+
+fn valid_github_commit(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn github_error(source_id: &IntentId, error: GithubApiError) -> PlanError {
+    PlanError::Github {
+        source_id: source_id.to_string(),
+        kind: match error {
+            GithubApiError::Authentication => GithubResolutionError::Authentication,
+            GithubApiError::RateLimited => GithubResolutionError::RateLimited,
+            GithubApiError::Unavailable => GithubResolutionError::Unavailable,
+        },
+    }
+}
+
 pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>, PlanError> {
     let Some(source) = plan.get("source") else {
         return Ok(None);
@@ -513,6 +779,68 @@ pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>,
         .map_err(|_| PlanError::Unsupported("invalid planned Candidate"))?;
     let root_file = open_source_root(&root)?;
     let bytes = read_candidate(&root, &root_file, &candidate)?;
+    let asset = plan
+        .get("asset")
+        .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
+    if asset.get("sha256").and_then(Value::as_str) != Some(&sha256(&bytes).to_string())
+        || asset.get("byte_length").and_then(Value::as_u64) != Some(bytes.len() as u64)
+        || asset.get("media_type").and_then(Value::as_str)
+            != Some(detect_media_type(&bytes)?.as_str())
+    {
+        return Err(PlanError::SourceDrift);
+    }
+    Ok(Some(bytes))
+}
+
+pub(crate) fn planned_github_asset_bytes(
+    plan: &Value,
+    github: &dyn GithubApi,
+) -> Result<Option<Vec<u8>>, PlanError> {
+    let Some(source) = plan.get("source") else {
+        return Ok(None);
+    };
+    if source.get("kind").and_then(Value::as_str) != Some("github") {
+        return Err(PlanError::Unsupported("planned Source is not GitHub"));
+    }
+    let source_id = source
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or(PlanError::Unsupported("invalid planned Source"))?
+        .parse::<IntentId>()
+        .map_err(|_| PlanError::Unsupported("invalid planned Source"))?;
+    let repository = source
+        .get("repository")
+        .and_then(Value::as_str)
+        .ok_or(PlanError::Unsupported("invalid planned Source"))?;
+    let commit = source
+        .get("resolved_commit")
+        .and_then(Value::as_str)
+        .filter(|value| valid_github_commit(value))
+        .ok_or(PlanError::Unsupported("invalid planned Source"))?;
+    let candidate = plan
+        .get("selection")
+        .and_then(|value| value.get("candidate"))
+        .and_then(Value::as_str)
+        .ok_or(PlanError::Unsupported("invalid planned Selection"))?
+        .parse::<CandidatePath>()
+        .map_err(|_| PlanError::Unsupported("invalid planned Candidate"))?;
+    let source_path = source
+        .get("path")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or(PlanError::Unsupported("invalid planned Source"))?
+                .parse::<SourcePath>()
+                .map_err(|_| PlanError::Unsupported("invalid planned Source"))
+        })
+        .transpose()?;
+    let path = github_repository_path(source_path.as_ref(), &candidate);
+    let bytes = github
+        .blob(repository, commit, &path)
+        .map_err(|error| github_error(&source_id, error))?;
+    if bytes.len() as u64 > MAX_ASSET_BYTES {
+        return Err(github_error(&source_id, GithubApiError::Unavailable));
+    }
     let asset = plan
         .get("asset")
         .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
