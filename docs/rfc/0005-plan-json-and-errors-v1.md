@@ -194,6 +194,36 @@ Rules:
 
 Generated Color Resolution requires `source`, `selection`, and `asset`, and requires `environment.manifest.wallpaper.mode = "image"`. The asset digest is not duplicated.
 
+#### `kmeans-v1`
+
+`kmeans-v1` is the only v1 generated-color algorithm. It operates on selected Asset bytes and produces the complete RFC 0001 colors object, including cursor and selection colors.
+
+Input is decoded PNG or JPEG. Decoded width and height MUST each be at most 16,384, decoded pixel count MUST be `1..=16_777_216`, decoder allocation MUST be bounded at 256 MiB, and decoded channels MUST be 8-bit grayscale, grayscale-alpha, RGB, or RGBA. Grayscale channels are replicated into RGB; alpha, color profiles, and orientation metadata do not affect colors. A limit violation or decode failure is `asset.unsupported-image`.
+
+Pixels are RGB triples in row-major order. Let `N` be pixel count and `S = min(N, 65_536)`. Samples are pixels at zero-based indices `floor(i * N / S)` for every `i` in `0..S`. Clustering uses eight RGB centers and squared Euclidean distance:
+
+1. Center 0 is the per-channel sample mean, rounded to nearest integer with half values rounded up.
+2. Each remaining center is the sampled RGB value whose distance to its nearest existing center is greatest. Ties choose lexicographically greatest RGB.
+3. Perform exactly 16 Lloyd assignment/update rounds. Assignment ties choose the lowest center index. Updated per-channel means use the same rounding as center 0. An empty center retains its prior value.
+
+Background is the center minimizing `2126*r + 7152*g + 722*b`; ties choose lexicographically smallest RGB. Foreground is whichever of `000000` and `ffffff` has greater WCAG 2 relative luminance contrast against background; a tie chooses `000000`. Cursor equals foreground. Selection background is the per-channel mix `(2*background + foreground) / 3`, rounded to nearest integer with half values rounded up. Selection foreground is chosen from black and white by the same contrast rule. These choices guarantee at least 4.5:1 contrast for foreground, cursor, and selection foreground against their respective backgrounds.
+
+ANSI palette entries 0, 7, 8, and 15 are background, foreground, selection background, and foreground. Entries 1–6 use these RGB targets in order:
+
+```text
+cd3131 0dbc79 e5e510 2472c8 bc3fbc 11a8cd
+```
+
+Entries 9–14 use:
+
+```text
+f14c4c 23d18b f5f543 3b8eea d65cd6 29b8db
+```
+
+For each target, choose the nearest final center by squared Euclidean distance, ties by lowest center index, then output the equal per-channel mix of center and target rounded to nearest integer with half values rounded up.
+
+Only generated colors enter the Environment Manifest and Environment identity. Algorithm name remains Plan and Activation provenance, so another resolution producing identical managed colors deduplicates to the same Environment.
+
 ### Explicit
 
 ```json
