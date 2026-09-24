@@ -9,7 +9,10 @@ use std::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-const DEFAULT_CONFIG: &str = "schema_version = 1\n\n[sources]\n";
+const DEFAULT_CONFIG: &str =
+    "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n";
+const WELCOME_PROFILE: &str = "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\n\n[colors]\nmode = \"generated\"\n";
+const WELCOME_IMAGE: &[u8] = include_bytes!("../media/welcome.png");
 const HOOK_LINE: &str = "config-file = ?";
 
 /// Inputs that choose platform paths. Tests inject these instead of env globals.
@@ -246,6 +249,9 @@ fn init_with_publish_config(
             ensure_dir(&managed_root.join(dir), &mut mutations, &mut created)?;
         }
         ensure_default_config(&managed_root, initial_config, &mut mutations, &mut created)?;
+        if first_init && initial_config == DEFAULT_CONFIG.as_bytes() {
+            ensure_welcome(&managed_root, &mut mutations, &mut created)?;
+        }
         if first_init {
             probe(&managed_root)?;
         }
@@ -636,6 +642,22 @@ pub fn init_repair(paths: &InitPaths) -> Result<InitReport, InitError> {
     Ok(report)
 }
 
+// Interrupted init may leave these files before publishing state.lock; user changes are never repairable as bundled bytes.
+fn is_bundled_example(entry: &fs::DirEntry) -> bool {
+    let name = entry.file_name();
+    let expected: &[u8] = match name.to_str() {
+        Some("welcome.png") => WELCOME_IMAGE,
+        Some("welcome.toml") => WELCOME_PROFILE.as_bytes(),
+        _ => return false,
+    };
+    let path = entry.path();
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return false;
+    };
+    validate_existing(&path, &metadata, false).is_ok()
+        && fs::read(&path).is_ok_and(|bytes| bytes == expected)
+}
+
 fn resume_first_init(
     paths: &InitPaths,
     root: &Path,
@@ -664,7 +686,9 @@ fn resume_first_init(
                     .is_some()
                 {
                     // Parent directories may contain only another required structural directory.
-                    let allowed = path == root.join("assets") || path == root.join("history");
+                    let allowed = path == root.join("assets")
+                        || path == root.join("history")
+                        || path == root.join("profiles");
                     if !allowed
                         || fs::read_dir(&path)
                             .map_err(|source| InitError::Io {
@@ -677,7 +701,9 @@ fn resume_first_init(
                                 };
                                 !((path == root.join("assets") && entry.file_name() == "sha256")
                                     || (path == root.join("history")
-                                        && entry.file_name() == "activations"))
+                                        && entry.file_name() == "activations")
+                                    || (path == root.join("profiles")
+                                        && is_bundled_example(&entry)))
                             })
                     {
                         return Err(InitError::RepairRequired(path));
@@ -738,6 +764,13 @@ fn resume_first_init(
             &mut mutations,
             &mut created,
         )?;
+        if fs::read(root.join("config.toml")).map_err(|source| InitError::Io {
+            path: root.join("config.toml"),
+            source,
+        })? == DEFAULT_CONFIG.as_bytes()
+        {
+            ensure_welcome(root, &mut mutations, &mut created)?;
+        }
         probe_capabilities(root)?;
         ensure_file(&root.join("state.lock"), b"", &mut mutations, &mut created)?;
         _published_lock = Some(lock_state(&root.join("state.lock"))?);
@@ -900,6 +933,11 @@ fn inspect(
                 && (!root_published || item.path.ends_with("cache"))
             {
                 mutations.push(format!("ensure {}", item.path.display()));
+            }
+        }
+        if fs::symlink_metadata(&managed_root).is_err() {
+            for file in ["profiles/welcome.toml", "profiles/welcome.png"] {
+                mutations.push(format!("ensure {}", managed_root.join(file).display()));
             }
         }
         if hook_state == "missing" {
@@ -1114,6 +1152,25 @@ fn ensure_default_config(
     Err(InitError::WrongKind(root.to_owned()))
 }
 
+fn ensure_welcome(
+    root: &Path,
+    mutations: &mut Vec<String>,
+    created: &mut Vec<Created>,
+) -> Result<(), InitError> {
+    ensure_file(
+        &root.join("profiles/welcome.png"),
+        WELCOME_IMAGE,
+        mutations,
+        created,
+    )?;
+    ensure_file(
+        &root.join("profiles/welcome.toml"),
+        WELCOME_PROFILE.as_bytes(),
+        mutations,
+        created,
+    )
+}
+
 fn ensure_file(
     path: &Path,
     bytes: &[u8],
@@ -1125,6 +1182,7 @@ fn ensure_file(
         return Ok(());
     }
     let mut file = create_private_file(path)?;
+    let index = created.len();
     created.push(Created::capture(path, false)?);
     file.write_all(bytes).map_err(|source| InitError::Io {
         path: path.to_owned(),
@@ -1134,6 +1192,7 @@ fn ensure_file(
         path: path.to_owned(),
         source,
     })?;
+    created[index] = Created::capture(path, false)?;
     mutations.push(format!("created file {}", path.display()));
     Ok(())
 }

@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.0.1]
+
+### Added
+
+- Fresh `init` provides a working `welcome` Profile with bundled wallpaper and generated colors; existing installations are preserved.
+- Project mascot in README and Linux release archive.
+
 ## [1.0.0]
 
 ### Added
