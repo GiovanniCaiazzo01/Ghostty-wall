@@ -25,5 +25,7 @@ pub mod recovery;
 pub mod runtime;
 /// Pure, versioned Candidate Selection Algorithms.
 pub mod selection;
+/// Terminal browser state machine and Ghostty image preview.
+pub mod terminal_browser;
 /// Read-only named Ghostty theme resolution.
 pub mod theme;
