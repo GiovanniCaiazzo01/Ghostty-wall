@@ -4,17 +4,17 @@
 
 **Blocked by:** 05 — local resolution core already available; full public Plan completion depends on this issue's Recovery Inspection and issue 11's reload observations. Do not mark 05 complete before those integrations.
 
-**Status:** in-progress
+**Status:** done
 
 ## Progress
 
-- Activation ID encodes validated monotonic sequence; regression tests cover limits and canonical spelling.
-- Read-only History inspection validates contiguous records, replay cursor/cause, strict schema/timestamps and referenced Environment/Asset bytes under shared lock. `previous_target` resolves cursor; no replay commit yet. Tests include truncated PNG despite matching digest and magic.
-- Apply publication, Projection reconciliation, `previous` commit, and reload remain open; do not claim issue complete. Storage traversal still needs race-safe directory pinning; duplicate assets outside canonical shard are not yet checked.
+- Activation ID and validated History enforce contiguous monotonic sequence, strict records, cursor/cause invariants, and referenced Environment/Asset integrity.
+- Local Profile apply revalidates under the exclusive lock, reconciles Projection, ensures immutable Asset/Environment records, and publishes the Activation at the durable no-replace commit point.
+- `previous` replays durable Environments by History Cursor without Profile or Source resolution; the best-effort reload outcome remains separate from the committed Activation.
 
-- [ ] Asset and Environment stores distinguish missing, valid, and corrupt state.
-- [ ] Apply uses exclusive locking, atomic durable primitives, and Activation as the commit point.
-- [ ] Recovery Inspection is read-only and Reconciliation changes only derived Projection.
-- [ ] History validation, sequence identity, cursor semantics, and replay invariants follow RFC 0006.
-- [ ] `previous` works across replay-of-replay and repeated Environment cases without network or regeneration.
-- [ ] Reload failure does not invalidate durable activation.
+- [x] Asset and Environment stores distinguish missing, valid, and corrupt state.
+- [x] Apply uses exclusive locking, atomic durable primitives, and Activation as the commit point.
+- [x] Recovery Inspection is read-only and Reconciliation changes only derived Projection.
+- [x] History validation, sequence identity, cursor semantics, and replay invariants follow RFC 0006.
+- [x] `previous` works across replay-of-replay and repeated Environment cases without network or regeneration.
+- [x] Reload failure does not invalidate durable activation.

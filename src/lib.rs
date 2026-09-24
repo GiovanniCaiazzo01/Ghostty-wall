@@ -2,6 +2,8 @@
 
 #![warn(missing_docs)]
 
+/// Durable Profile apply and History replay.
+pub mod apply;
 /// Encoding and decoding of public and persisted protocols.
 pub mod codec;
 /// Validated domain types defined by the accepted RFCs.

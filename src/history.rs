@@ -210,10 +210,6 @@ where
 /// Projection or Ghostty include, and cannot re-derive historical Profile,
 /// Candidate Set, or Plan observations.
 pub fn inspect_history(root: &Path) -> Result<History, HistoryError> {
-    let root_type = fs::symlink_metadata(root).map_err(|e| io_error(root, e))?;
-    if !root_type.is_dir() || root_type.file_type().is_symlink() {
-        return Err(corrupt(root));
-    }
     let lock = root.join("state.lock");
     let _lock = open_regular(&lock)?;
     #[cfg(not(unix))]
@@ -231,6 +227,14 @@ pub fn inspect_history(root: &Path) -> Result<History, HistoryError> {
         if rc != 0 {
             return Err(io_error(&lock, io::Error::last_os_error()));
         }
+    }
+    inspect_history_unlocked(root)
+}
+
+pub(crate) fn inspect_history_unlocked(root: &Path) -> Result<History, HistoryError> {
+    let root_type = fs::symlink_metadata(root).map_err(|e| io_error(root, e))?;
+    if !root_type.is_dir() || root_type.file_type().is_symlink() {
+        return Err(corrupt(root));
     }
     let directory = root.join("history/activations");
     for dir in [
@@ -433,7 +437,25 @@ fn validate_asset(
     length: Option<u64>,
 ) -> Result<(), HistoryError> {
     let hex = digest.to_string();
-    let shard = root.join("assets/sha256").join(&hex[..2]);
+    let store = root.join("assets/sha256");
+    for entry in fs::read_dir(&store).map_err(|error| io_error(&store, error))? {
+        let entry = entry.map_err(|error| io_error(&store, error))?;
+        let directory = entry.path();
+        let metadata =
+            fs::symlink_metadata(&directory).map_err(|error| io_error(&directory, error))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(corrupt(&directory));
+        }
+        if entry.file_name().to_string_lossy() != hex[..2] {
+            for item in fs::read_dir(&directory).map_err(|error| io_error(&directory, error))? {
+                let item = item.map_err(|error| io_error(&directory, error))?;
+                if item.file_name().to_string_lossy().starts_with(&hex) {
+                    return Err(corrupt(&item.path()));
+                }
+            }
+        }
+    }
+    let shard = store.join(&hex[..2]);
     let meta = fs::symlink_metadata(&shard).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             corrupt(&shard)
@@ -586,7 +608,7 @@ fn lower_hex(text: &str, size: usize) -> bool {
             .bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
-fn timestamp_valid(text: &str) -> bool {
+pub(crate) fn timestamp_valid(text: &str) -> bool {
     let b = text.as_bytes();
     if b.len() != 27
         || b[4] != b'-'
