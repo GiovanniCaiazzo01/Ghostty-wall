@@ -18,4 +18,4 @@ When a skill publishes a spec or ticket, create the corresponding file under `.s
 
 When a skill fetches a ticket, read the referenced local markdown file.
 
-The local tracker is authoritative while the v1 rewrite remains uncommitted and ahead of the GitHub baseline.
+The local tracker is authoritative. `.scratch/` is ignored by Git; do not publish local issue files to GitHub.
