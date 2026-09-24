@@ -18,14 +18,15 @@ use crate::{
     github::GithubApi,
     history::{HistoryError, inspect_history_unlocked, timestamp_valid},
     plan::{
-        PlanError, PlanPlatform, ReloadObservation, ReloadUnavailableReason, asset_disposition,
-        environment_disposition, plan_github_profile_json, plan_local_profile_json,
-        plan_local_profile_with_theme_json, planned_github_asset_bytes, planned_local_asset_bytes,
+        PlanError, PlanPlatform, asset_disposition, environment_disposition,
+        plan_github_profile_json, plan_local_profile_json, plan_local_profile_with_theme_json,
+        planned_github_asset_bytes, planned_local_asset_bytes,
     },
     recovery::{
         RecoveryError, exclusive_state_lock, inspect_integration_hook,
         materialize_projection_unlocked, reconcile_recovery_state_unlocked,
     },
+    runtime::{ReloadAdapter, ReloadOutcome},
     theme::ThemeResolver,
 };
 
@@ -68,7 +69,7 @@ pub enum ApplyError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyOutcome {
     activation_id: ActivationId,
-    reload_succeeded: bool,
+    reload_outcome: ReloadOutcome,
 }
 
 impl ApplyOutcome {
@@ -79,13 +80,18 @@ impl ApplyOutcome {
 
     /// Whether post-commit runtime reload succeeded.
     pub const fn reload_succeeded(self) -> bool {
-        self.reload_succeeded
+        matches!(self.reload_outcome, ReloadOutcome::Succeeded)
+    }
+
+    /// Post-commit runtime outcome, separate from durable Activation success.
+    pub const fn reload_outcome(self) -> ReloadOutcome {
+        self.reload_outcome
     }
 }
 
 /// Resolve and durably apply one local Profile, then attempt reload.
 #[allow(clippy::too_many_arguments)]
-pub fn apply_local_profile<F, E>(
+pub fn apply_local_profile<R: ReloadAdapter>(
     config_dir: &Path,
     home: &Path,
     managed_root: &Path,
@@ -95,16 +101,10 @@ pub fn apply_local_profile<F, E>(
     profile: &ProfileIntent,
     seed: Option<&ResolutionSeed>,
     activated_at: &str,
-    reload: F,
-) -> Result<ApplyOutcome, ApplyError>
-where
-    F: FnOnce() -> Result<(), E>,
-{
+    reload: R,
+) -> Result<ApplyOutcome, ApplyError> {
     validate_timestamp(activated_at)?;
-    let platform = PlanPlatform::new(
-        effective_root_config.to_owned(),
-        ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
-    );
+    let platform = PlanPlatform::new(effective_root_config.to_owned(), reload.observation());
     let plan = plan_local_profile_json(
         config_dir,
         home,
@@ -128,7 +128,7 @@ where
 
 /// Resolve and durably apply one local Profile through a named-theme adapter.
 #[allow(clippy::too_many_arguments)]
-pub fn apply_local_profile_with_theme<F, E>(
+pub fn apply_local_profile_with_theme<R: ReloadAdapter>(
     config_dir: &Path,
     home: &Path,
     managed_root: &Path,
@@ -139,16 +139,10 @@ pub fn apply_local_profile_with_theme<F, E>(
     seed: Option<&ResolutionSeed>,
     themes: &dyn ThemeResolver,
     activated_at: &str,
-    reload: F,
-) -> Result<ApplyOutcome, ApplyError>
-where
-    F: FnOnce() -> Result<(), E>,
-{
+    reload: R,
+) -> Result<ApplyOutcome, ApplyError> {
     validate_timestamp(activated_at)?;
-    let platform = PlanPlatform::new(
-        effective_root_config.to_owned(),
-        ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
-    );
+    let platform = PlanPlatform::new(effective_root_config.to_owned(), reload.observation());
     let plan = plan_local_profile_with_theme_json(
         config_dir,
         home,
@@ -173,7 +167,7 @@ where
 
 /// Resolve and durably apply one Profile through a commit-pinned GitHub adapter.
 #[allow(clippy::too_many_arguments)]
-pub fn apply_github_profile<F, E>(
+pub fn apply_github_profile<R: ReloadAdapter>(
     config_dir: &Path,
     home: &Path,
     managed_root: &Path,
@@ -184,16 +178,10 @@ pub fn apply_github_profile<F, E>(
     seed: Option<&ResolutionSeed>,
     activated_at: &str,
     github: &dyn GithubApi,
-    reload: F,
-) -> Result<ApplyOutcome, ApplyError>
-where
-    F: FnOnce() -> Result<(), E>,
-{
+    reload: R,
+) -> Result<ApplyOutcome, ApplyError> {
     validate_timestamp(activated_at)?;
-    let platform = PlanPlatform::new(
-        effective_root_config.to_owned(),
-        ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
-    );
+    let platform = PlanPlatform::new(effective_root_config.to_owned(), reload.observation());
     let plan = plan_github_profile_json(
         config_dir,
         home,
@@ -216,17 +204,14 @@ where
     )
 }
 
-fn apply_resolved_profile<F, E>(
+fn apply_resolved_profile<R: ReloadAdapter>(
     managed_root: &Path,
     effective_root_config: &Path,
     activated_at: &str,
-    reload: F,
+    reload: R,
     plan: Value,
     asset_bytes: Option<Vec<u8>>,
-) -> Result<ApplyOutcome, ApplyError>
-where
-    F: FnOnce() -> Result<(), E>,
-{
+) -> Result<ApplyOutcome, ApplyError> {
     let lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
     inspect_integration_hook(effective_root_config, &managed_root.join("current.ghostty"))?;
     let history = inspect_history_unlocked(managed_root)?;
@@ -287,20 +272,17 @@ where
 
     Ok(ApplyOutcome {
         activation_id: id,
-        reload_succeeded: reload().is_ok(),
+        reload_outcome: reload.reload(),
     })
 }
 
 /// Replay predecessor selected by current durable History Cursor, then reload.
-pub fn previous<F, E>(
+pub fn previous<R: ReloadAdapter>(
     managed_root: &Path,
     effective_root_config: &Path,
     activated_at: &str,
-    reload: F,
-) -> Result<ApplyOutcome, ApplyError>
-where
-    F: FnOnce() -> Result<(), E>,
-{
+    reload: R,
+) -> Result<ApplyOutcome, ApplyError> {
     validate_timestamp(activated_at)?;
     let lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
     inspect_integration_hook(effective_root_config, &managed_root.join("current.ghostty"))?;
@@ -330,7 +312,7 @@ where
 
     Ok(ApplyOutcome {
         activation_id: id,
-        reload_succeeded: reload().is_ok(),
+        reload_outcome: reload.reload(),
     })
 }
 

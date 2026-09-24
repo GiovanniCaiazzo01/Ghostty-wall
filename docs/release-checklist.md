@@ -32,6 +32,26 @@
 7. Confirm the script still works with the default macOS Bash/userland environment
 8. Run `./scripts/uninstall.sh`
 
+## Rust v1 Runtime Adapter Smoke
+
+### Linux (stable)
+
+1. Record Ghostty and systemd versions and confirm `systemctl` resolves through `PATH`.
+2. Launch Ghostty through `app-com.mitchellh.ghostty.service` and verify `systemctl --user is-active --quiet app-com.mitchellh.ghostty.service` succeeds.
+3. Run `ghostty-wall apply PROFILE`; confirm the Activation and `current.ghostty` commit before runtime reload.
+4. Confirm Ghostty updates and `systemctl --user reload app-com.mitchellh.ghostty.service` succeeds.
+5. Stop the service and apply again; confirm reload reports unavailable while the new Activation remains committed.
+6. Force the reload command to fail on a disposable setup; confirm reload reports failed while the new Activation remains committed.
+
+### macOS (experimental)
+
+1. Record macOS and Ghostty versions, enable Ghostty's `macos-applescript` option, and launch Ghostty with one terminal.
+2. Verify the API directly with `osascript -e 'tell application "Ghostty" to perform action "reload_config" on terminal 1'`.
+3. Run `ghostty-wall apply PROFILE`; confirm the Activation and `current.ghostty` commit before the experimental reload, then confirm Ghostty updates.
+4. Quit Ghostty and apply again; confirm reload reports unavailable while the new Activation remains committed.
+5. Disable AppleScript or deny automation on a disposable setup and apply again; confirm reload reports failed while the new Activation remains committed.
+6. Record results as experimental evidence; do not promote macOS support until issue 14's real-system verification passes.
+
 ## Failure Cases
 
 1. Run with an invalid repo line and confirm validation errors are clear
