@@ -6,6 +6,8 @@ Ghostty Wall v1 is a Rust CLI for reproducible Ghostty visual Environments. Prof
 
 Linux support is stable. macOS support is **experimental** pending [real-system verification](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/5). Windows is unsupported.
 
+For everything you can configure and run, see the [user guide](docs/user-guide.md).
+
 ## Install
 
 ### Linux release artifact
