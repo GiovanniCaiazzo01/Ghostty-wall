@@ -20,12 +20,13 @@ use crate::{
     plan::{
         PlanError, PlanPlatform, ReloadObservation, ReloadUnavailableReason, asset_disposition,
         environment_disposition, plan_github_profile_json, plan_local_profile_json,
-        planned_github_asset_bytes, planned_local_asset_bytes,
+        plan_local_profile_with_theme_json, planned_github_asset_bytes, planned_local_asset_bytes,
     },
     recovery::{
         RecoveryError, exclusive_state_lock, inspect_integration_hook,
         materialize_projection_unlocked, reconcile_recovery_state_unlocked,
     },
+    theme::ThemeResolver,
 };
 
 /// Failure before or during durable Activation publication.
@@ -113,6 +114,51 @@ where
         profile,
         seed,
         &platform,
+    )?;
+    let asset_bytes = planned_local_asset_bytes(&plan)?;
+    apply_resolved_profile(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        reload,
+        plan,
+        asset_bytes,
+    )
+}
+
+/// Resolve and durably apply one local Profile through a named-theme adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_local_profile_with_theme<F, E>(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    effective_root_config: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&ResolutionSeed>,
+    themes: &dyn ThemeResolver,
+    activated_at: &str,
+    reload: F,
+) -> Result<ApplyOutcome, ApplyError>
+where
+    F: FnOnce() -> Result<(), E>,
+{
+    validate_timestamp(activated_at)?;
+    let platform = PlanPlatform::new(
+        effective_root_config.to_owned(),
+        ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
+    );
+    let plan = plan_local_profile_with_theme_json(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        &platform,
+        themes,
     )?;
     let asset_bytes = planned_local_asset_bytes(&plan)?;
     apply_resolved_profile(
