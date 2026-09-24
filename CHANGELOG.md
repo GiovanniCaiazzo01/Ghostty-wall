@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.0.0]
+
+### Added
+
+- Rust CLI for initialization, planning, apply, History replay, Doctor, migration, safe uninstall, and terminal Profile browsing.
+- Reproducible Profile resolution for local-directory and commit-pinned GitHub Sources.
+- Immutable Environments, content-addressed Assets, append-only Activations, and recoverable Ghostty Projection.
+- Explicit, named-theme, and deterministic wallpaper-generated colors.
+- Stable Linux systemd reload adapter and experimental macOS AppleScript adapter.
+- Tagged Linux x86_64 binary archive with checksum and installer.
+
+### Changed
+
+- Linux is stable v1 platform; macOS remains experimental pending real-system verification.
+- Bash v0 is superseded by Rust v1 and remains available at tag `v0.2.2`.
+
 ## [0.2.2]
 
 ### Changed

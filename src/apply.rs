@@ -19,8 +19,8 @@ use crate::{
     history::{HistoryError, inspect_history_unlocked, timestamp_valid},
     plan::{
         PlanError, PlanPlatform, asset_disposition, environment_disposition,
-        plan_github_profile_json, plan_local_profile_json, plan_local_profile_with_theme_json,
-        planned_github_asset_bytes, planned_local_asset_bytes,
+        plan_github_profile_json, plan_github_profile_with_theme_json, plan_local_profile_json,
+        plan_local_profile_with_theme_json, planned_github_asset_bytes, planned_local_asset_bytes,
     },
     recovery::{
         RecoveryError, exclusive_state_lock, inspect_integration_hook,
@@ -274,6 +274,47 @@ fn apply_resolved_profile<R: ReloadAdapter>(
         activation_id: id,
         reload_outcome: reload.reload(),
     })
+}
+
+/// Resolve and durably apply one GitHub Profile through a named-theme adapter.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_github_profile_with_theme<R: ReloadAdapter>(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    effective_root_config: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&ResolutionSeed>,
+    themes: &dyn ThemeResolver,
+    activated_at: &str,
+    github: &dyn GithubApi,
+    reload: R,
+) -> Result<ApplyOutcome, ApplyError> {
+    validate_timestamp(activated_at)?;
+    let platform = PlanPlatform::new(effective_root_config.to_owned(), reload.observation());
+    let plan = plan_github_profile_with_theme_json(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        &platform,
+        github,
+        themes,
+    )?;
+    let asset_bytes = planned_github_asset_bytes(&plan, github)?;
+    apply_resolved_profile(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        reload,
+        plan,
+        asset_bytes,
+    )
 }
 
 /// Replay predecessor selected by current durable History Cursor, then reload.
