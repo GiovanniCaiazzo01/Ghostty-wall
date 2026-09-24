@@ -9,6 +9,7 @@ use std::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+const OLD_DEFAULT_CONFIG: &str = "schema_version = 1\n\n[sources]\n";
 const DEFAULT_CONFIG: &str =
     "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n";
 const WELCOME_PROFILE: &str = "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\n\n[colors]\nmode = \"generated\"\n";
@@ -135,6 +136,9 @@ pub enum InitError {
     /// Existing installation requires explicit repair.
     #[error("init --repair required for {0}")]
     RepairRequired(PathBuf),
+    /// Explicit example seeding would overwrite user intent or durable state.
+    #[error("init --welcome requires an untouched empty installation at {0}")]
+    WelcomeRequiresEmptyInstall(PathBuf),
     /// Existing intent is invalid and must not be replaced.
     #[error("invalid config.toml at {0}")]
     InvalidIntent(PathBuf),
@@ -171,6 +175,83 @@ pub fn dry_run(paths: &InitPaths) -> Result<InitReport, InitError> {
 /// Creates or verifies Managed Root and installs one semantic Ghostty hook.
 pub fn init(paths: &InitPaths) -> Result<InitReport, InitError> {
     init_with_publish(paths, probe_capabilities, sync_managed_root)
+}
+
+/// Explicitly seeds the bundled example into an untouched pre-1.0.1 installation.
+/// Normal init never changes previously published Intent.
+pub fn init_welcome(paths: &InitPaths) -> Result<InitReport, InitError> {
+    let mut report = init(paths)?;
+    let root = &report.managed_root;
+    let _lock = lock_state(&root.join("state.lock"))?;
+    preflight_layout(root)?;
+    let config = root.join("config.toml");
+    let bytes = fs::read(&config).map_err(|source| InitError::Io {
+        path: config.clone(),
+        source,
+    })?;
+    let profile_dir = root.join("profiles");
+    if bytes == DEFAULT_CONFIG.as_bytes() {
+        if ["welcome.toml", "welcome.png"]
+            .iter()
+            .all(|name| is_bundled_example_path(&profile_dir.join(name)))
+        {
+            return Ok(report);
+        }
+        return Err(InitError::WelcomeRequiresEmptyInstall(config));
+    }
+    if bytes != OLD_DEFAULT_CONFIG.as_bytes() {
+        return Err(InitError::WelcomeRequiresEmptyInstall(config));
+    }
+    let entries = fs::read_dir(&profile_dir).map_err(|source| InitError::Io {
+        path: profile_dir.clone(),
+        source,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| InitError::Io {
+            path: profile_dir.clone(),
+            source,
+        })?;
+        if !is_bundled_example(&entry) {
+            return Err(InitError::WelcomeRequiresEmptyInstall(entry.path()));
+        }
+    }
+    for dir in ["assets/sha256", "environments", "history/activations"] {
+        let path = root.join(dir);
+        if fs::read_dir(&path)
+            .map_err(|source| InitError::Io {
+                path: path.clone(),
+                source,
+            })?
+            .next()
+            .is_some()
+        {
+            return Err(InitError::WelcomeRequiresEmptyInstall(path));
+        }
+    }
+
+    let mut created = Vec::new();
+    let mut mutations = Vec::new();
+    let result = (|| {
+        ensure_welcome(root, &mut mutations, &mut created)?;
+        fs::File::open(&profile_dir)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|source| InitError::Io {
+                path: profile_dir.clone(),
+                source,
+            })?;
+        // Publish the Source last, so partial retries never expose a resolvable Profile.
+        atomic_edit(&config, &config, DEFAULT_CONFIG.as_bytes())?;
+        mutations.push(format!("updated file {}", config.display()));
+        Ok(())
+    })();
+    if let Err(error) = &result
+        && !matches!(error, InitError::HookPublicationUncertain { .. })
+    {
+        rollback(&created);
+    }
+    result?;
+    report.mutations.extend(mutations);
+    Ok(report)
 }
 
 pub(crate) fn init_with_config(
@@ -644,18 +725,23 @@ pub fn init_repair(paths: &InitPaths) -> Result<InitReport, InitError> {
 
 // Interrupted init may leave these files before publishing state.lock; user changes are never repairable as bundled bytes.
 fn is_bundled_example(entry: &fs::DirEntry) -> bool {
-    let name = entry.file_name();
+    is_bundled_example_path(&entry.path())
+}
+
+fn is_bundled_example_path(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
     let expected: &[u8] = match name.to_str() {
         Some("welcome.png") => WELCOME_IMAGE,
         Some("welcome.toml") => WELCOME_PROFILE.as_bytes(),
         _ => return false,
     };
-    let path = entry.path();
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
-    validate_existing(&path, &metadata, false).is_ok()
-        && fs::read(&path).is_ok_and(|bytes| bytes == expected)
+    validate_existing(path, &metadata, false).is_ok()
+        && fs::read(path).is_ok_and(|bytes| bytes == expected)
 }
 
 fn resume_first_init(

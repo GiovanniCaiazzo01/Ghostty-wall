@@ -25,6 +25,31 @@ fn fresh_init_provides_working_welcome_profile() {
 }
 
 #[test]
+fn old_empty_install_can_opt_in_to_welcome_without_creating_files() {
+    let home = temp_dir("welcome-upgrade");
+    let config_home = home.join("config");
+    assert_success(&run(&home, &config_home, &["init"]));
+    let root = config_home.join("ghostty/ghostty-wall");
+    fs::write(
+        root.join("config.toml"),
+        "schema_version = 1\n\n[sources]\n",
+    )
+    .unwrap();
+    fs::remove_file(root.join("profiles/welcome.toml")).unwrap();
+    fs::remove_file(root.join("profiles/welcome.png")).unwrap();
+    assert!(
+        !run(&home, &config_home, &["plan", "welcome"])
+            .status
+            .success()
+    );
+
+    assert_success(&run(&home, &config_home, &["init", "--welcome"]));
+    assert_success(&run(&home, &config_home, &["init", "--welcome"]));
+    assert_success(&run(&home, &config_home, &["plan", "welcome"]));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn cli_runs_profile_to_environment_workflow() {
     let home = temp_dir("workflow");
     let config_home = home.join("config");
@@ -146,15 +171,12 @@ fn plan_json_failure_is_machine_readable() {
 }
 
 #[test]
-fn v1_installer_installs_rust_binary() {
+fn installer_installs_rust_binary() {
     let home = temp_dir("installer");
     let prefix = home.join("prefix");
     let binary = env!("CARGO_BIN_EXE_ghostty-wall");
     let output = Command::new("bash")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/scripts/install-v1.sh"
-        ))
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/install.sh"))
         .env("HOME", &home)
         .env("INSTALL_PREFIX", &prefix)
         .env("GHOSTTY_WALL_BINARY", binary)

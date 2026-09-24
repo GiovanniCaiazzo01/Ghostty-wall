@@ -30,7 +30,7 @@ jobs:
           name="ghostty-wall-${VERSION}-x86_64-unknown-linux-gnu"
           mkdir "$name"
           install -m 0755 target/release/ghostty-wall "$name/ghostty-wall"
-          install -m 0755 scripts/install-v1.sh "$name/install-v1.sh"
+          install -m 0755 scripts/install.sh "$name/install.sh"
           cp LICENSE README.md "$name/"
           mkdir "$name/media"
           cp media/mascot.png "$name/media/"

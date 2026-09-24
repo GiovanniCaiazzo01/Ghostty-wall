@@ -10,19 +10,19 @@ Linux support is stable. macOS support is **experimental** pending [real-system 
 
 ### Linux release artifact
 
-Download `ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz` and its `.sha256` file from the GitHub Release, then:
+Download `ghostty-wall-v1.0.2-x86_64-unknown-linux-gnu.tar.gz` and its `.sha256` file from the GitHub Release, then:
 
 ```bash
-sha256sum --check ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz
-cd ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu
-./install-v1.sh
+sha256sum --check ghostty-wall-v1.0.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf ghostty-wall-v1.0.2-x86_64-unknown-linux-gnu.tar.gz
+cd ghostty-wall-v1.0.2-x86_64-unknown-linux-gnu
+./install.sh
 ```
 
 Default destination is `~/.local/bin/ghostty-wall`. Set `INSTALL_PREFIX` to choose another prefix:
 
 ```bash
-INSTALL_PREFIX=/usr/local ./install-v1.sh
+INSTALL_PREFIX=/usr/local ./install.sh
 ```
 
 ### Build from source
@@ -32,7 +32,7 @@ Rust 1.85 or newer is required for edition 2024.
 ```bash
 git clone https://github.com/GiovanniCaiazzo01/Ghostty-wall.git
 cd Ghostty-wall
-./scripts/install-v1.sh
+./scripts/install.sh
 ```
 
 Installer builds with `cargo build --locked --release` when no release binary is present. On macOS it prints an experimental-support warning.
@@ -49,7 +49,14 @@ ghostty-wall apply welcome
 ghostty-wall doctor
 ```
 
-Existing installations are preserved: rerunning `init` does not overwrite Intent or add the example to an already-published Managed Root.
+Existing installations are preserved: rerunning `init` does not overwrite Intent. If an earlier v1 install still has the empty default `config.toml`, no Profiles, and no History or Assets, opt in to the bundled example without creating files:
+
+```bash
+ghostty-wall init --welcome
+ghostty-wall plan welcome
+```
+
+`init --welcome` refuses customized or durable state rather than overwriting it.
 
 Linux Managed Root:
 
@@ -178,7 +185,7 @@ ghostty-wall uninstall
 Then remove binary using installation method:
 
 ```bash
-rm "$HOME/.local/bin/ghostty-wall"       # default install-v1.sh destination
+rm "$HOME/.local/bin/ghostty-wall"       # default install.sh destination
 cargo uninstall ghostty-wall              # cargo install
 ```
 
@@ -207,7 +214,7 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 bash scripts/test.sh
-shellcheck -x bin/ghostty-wall scripts/*.sh scripts/linux/*.sh scripts/mac/*.sh
+shellcheck -x bin/ghostty-wall scripts/*.sh
 ```
 
 Live GitHub test is separate:
