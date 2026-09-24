@@ -143,7 +143,7 @@ kind = "local-directory"
 path = "profiles"
 ```
 
-First init also writes `profiles/welcome.toml` and bundled `profiles/welcome.png`, plus a local `welcome` Source in `config.toml`. `plan welcome` works without extra files or a Resolution Seed. Existing published installations keep their Intent unchanged; init never backfills or replaces example files.
+First init also writes `profiles/welcome.toml` and bundled `profiles/welcome.png`, plus a local `welcome` Source in `config.toml`. `plan welcome` works without extra files or a Resolution Seed. Existing published installations keep their Intent unchanged under normal `init`. Explicit `init --welcome` is an opt-in for previously published, untouched v1.0.0 installations: it seeds the bundled example only when `config.toml` is exactly the old empty default, no user Profile or durable records exist, and any partial example files match bundled bytes. The config edit is atomic and published after the example files; retries are idempotent. An already complete welcome installation is a no-op. Customized Intent or altered example files are never overwritten.
 
 ## Eager and optional creation
 
