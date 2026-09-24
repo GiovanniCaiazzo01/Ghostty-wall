@@ -56,7 +56,7 @@ ghostty-wall init --welcome
 ghostty-wall plan welcome
 ```
 
-`init --welcome` refuses customized or durable state rather than overwriting it.
+`init --welcome` refuses customized or durable state rather than overwriting it. New `welcome` Profiles use `wallpaper.opacity = 0.1` for readable text; existing Profiles are not rewritten. For colored text over images, add `minimum-contrast = 4.5` to your Ghostty root config (`~/.config/ghostty/config.ghostty` on this Linux layout). Ghostty Wall preserves this setting when updating its Projection.
 
 Linux Managed Root:
 
@@ -196,7 +196,7 @@ There is no destructive `--purge` in v1. Reinstall plus `ghostty-wall init` reco
 ### Linux — stable
 
 - Managed Root under XDG Ghostty config.
-- Runtime reload through documented `app-com.mitchellh.ghostty.service` systemd user service.
+- Runtime reload through active `app-com.mitchellh.ghostty.service` systemd user service, or Ghostty GTK `reload-config` D-Bus action when launched from desktop.
 - Tagged releases publish x86_64 GNU/Linux binary archive and SHA-256 checksum.
 - Source builds remain available for other Linux architectures.
 

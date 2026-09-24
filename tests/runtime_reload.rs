@@ -96,7 +96,13 @@ fn systemd_adapter_classifies_unavailable_and_failed_runtime() {
     );
     assert!(missing.calls().is_empty());
 
-    let inactive = RecordingRunner::new(true, [Ok(CommandResult::new(false, []))]);
+    let inactive = RecordingRunner::new(
+        true,
+        [
+            Ok(CommandResult::new(false, [])),
+            Ok(CommandResult::new(false, [])),
+        ],
+    );
     let adapter = SystemdReload::new(inactive.clone(), "systemctl");
     assert_eq!(
         adapter.reload(),
@@ -114,6 +120,55 @@ fn systemd_adapter_classifies_unavailable_and_failed_runtime() {
     assert_eq!(
         adapter.reload(),
         ReloadOutcome::Failed(ReloadFailure::Reload)
+    );
+}
+
+#[test]
+fn systemd_adapter_reloads_desktop_launched_ghostty_via_dbus() {
+    let runner = RecordingRunner::new(
+        true,
+        [
+            Ok(CommandResult::new(false, [])),
+            Ok(CommandResult::new(true, [])),
+            Ok(CommandResult::new(true, [])),
+        ],
+    );
+    let adapter = SystemdReload::new(runner.clone(), "systemctl");
+    assert_eq!(adapter.reload(), ReloadOutcome::Succeeded);
+    assert_eq!(
+        runner.calls(),
+        vec![
+            vec![
+                "systemctl",
+                "--user",
+                "is-active",
+                "--quiet",
+                "app-com.mitchellh.ghostty.service"
+            ],
+            vec![
+                "busctl",
+                "--user",
+                "--quiet",
+                "status",
+                "com.mitchellh.ghostty"
+            ],
+            vec![
+                "busctl",
+                "--user",
+                "call",
+                "com.mitchellh.ghostty",
+                "/com/mitchellh/ghostty",
+                "org.gtk.Actions",
+                "Activate",
+                "sava{sv}",
+                "reload-config",
+                "0",
+                "0"
+            ],
+        ]
+        .into_iter()
+        .map(|args| args.into_iter().map(str::to_owned).collect())
+        .collect::<Vec<Vec<String>>>()
     );
 }
 

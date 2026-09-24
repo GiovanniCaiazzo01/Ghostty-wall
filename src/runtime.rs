@@ -10,6 +10,7 @@ use crate::plan::{ReloadObservation, ReloadUnavailableReason};
 
 /// Ghostty's documented Linux user service.
 pub const GHOSTTY_SYSTEMD_SERVICE: &str = "app-com.mitchellh.ghostty.service";
+const GHOSTTY_DBUS_NAME: &str = "com.mitchellh.ghostty";
 
 const GHOSTTY_RUNNING_SCRIPT: &str = "application \"Ghostty\" is running";
 const GHOSTTY_RELOAD_SCRIPT: &str =
@@ -102,7 +103,7 @@ impl CommandRunner for ProcessCommandRunner {
     }
 }
 
-/// Linux adapter using Ghostty's documented systemd user service.
+/// Linux adapter using systemd or the running GTK application's D-Bus action.
 pub struct SystemdReload<R> {
     runner: R,
     program: PathBuf,
@@ -120,7 +121,7 @@ impl<R> SystemdReload<R> {
 
 impl<R: CommandRunner> ReloadAdapter for SystemdReload<R> {
     fn observation(&self) -> ReloadObservation {
-        if self.runner.available(&self.program) {
+        if self.runner.available(&self.program) || self.runner.available(Path::new("busctl")) {
             ReloadObservation::Systemd
         } else {
             ReloadObservation::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable)
@@ -128,14 +129,33 @@ impl<R: CommandRunner> ReloadAdapter for SystemdReload<R> {
     }
 
     fn reload(&self) -> ReloadOutcome {
-        if !self.runner.available(&self.program) {
-            return ReloadOutcome::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable);
+        if self.runner.available(&self.program) {
+            match self.runner.run(
+                &self.program,
+                &["--user", "is-active", "--quiet", GHOSTTY_SYSTEMD_SERVICE],
+            ) {
+                Ok(result) if result.success => {
+                    return match self.runner.run(
+                        &self.program,
+                        &["--user", "reload", GHOSTTY_SYSTEMD_SERVICE],
+                    ) {
+                        Ok(result) if result.success => ReloadOutcome::Succeeded,
+                        Ok(_) | Err(_) => ReloadOutcome::Failed(ReloadFailure::Reload),
+                    };
+                }
+                Ok(_) => {}
+                Err(_) => return ReloadOutcome::Failed(ReloadFailure::Probe),
+            }
         }
 
-        match self.runner.run(
-            &self.program,
-            &["--user", "is-active", "--quiet", GHOSTTY_SYSTEMD_SERVICE],
-        ) {
+        let busctl = Path::new("busctl");
+        if !self.runner.available(busctl) {
+            return ReloadOutcome::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable);
+        }
+        match self
+            .runner
+            .run(busctl, &["--user", "--quiet", "status", GHOSTTY_DBUS_NAME])
+        {
             Ok(result) if result.success => {}
             Ok(_) => {
                 return ReloadOutcome::Unavailable(
@@ -144,10 +164,20 @@ impl<R: CommandRunner> ReloadAdapter for SystemdReload<R> {
             }
             Err(_) => return ReloadOutcome::Failed(ReloadFailure::Probe),
         }
-
         match self.runner.run(
-            &self.program,
-            &["--user", "reload", GHOSTTY_SYSTEMD_SERVICE],
+            busctl,
+            &[
+                "--user",
+                "call",
+                GHOSTTY_DBUS_NAME,
+                "/com/mitchellh/ghostty",
+                "org.gtk.Actions",
+                "Activate",
+                "sava{sv}",
+                "reload-config",
+                "0",
+                "0",
+            ],
         ) {
             Ok(result) if result.success => ReloadOutcome::Succeeded,
             Ok(_) | Err(_) => ReloadOutcome::Failed(ReloadFailure::Reload),

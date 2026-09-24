@@ -315,7 +315,7 @@ Example:
 
 `activate_environment.disposition` MUST equal `apply`. Reapplying the current Environment still represents a future Activation.
 
-`reload_ghostty.required` MUST be `false`. Adapter is `systemd`, `applescript`, or `unavailable`. With `unavailable`, `reason` is required and is one of:
+`reload_ghostty.required` MUST be `false`. Adapter is `systemd`, `applescript`, or `unavailable`. On Linux, `systemd` denotes the platform integration: use the active Ghostty user service when available; otherwise use the running Ghostty GTK application's `reload-config` D-Bus action. With `unavailable`, `reason` is required and is one of:
 
 ```text
 unsupported-platform

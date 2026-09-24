@@ -119,7 +119,11 @@ fn init_creates_layout_default_intent_marker_and_hook() {
         fs::read_to_string(root.join("config.toml")).unwrap(),
         "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n"
     );
-    assert!(root.join("profiles/welcome.toml").is_file());
+    assert!(
+        fs::read_to_string(root.join("profiles/welcome.toml"))
+            .unwrap()
+            .contains("opacity = 0.1")
+    );
     assert_eq!(
         fs::read(root.join("profiles/welcome.png")).unwrap(),
         include_bytes!("../media/welcome.png")
