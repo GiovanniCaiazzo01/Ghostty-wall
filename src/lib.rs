@@ -22,3 +22,5 @@ pub mod plan;
 pub mod recovery;
 /// Pure, versioned Candidate Selection Algorithms.
 pub mod selection;
+/// Read-only named Ghostty theme resolution.
+pub mod theme;

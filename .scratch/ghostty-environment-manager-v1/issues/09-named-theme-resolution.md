@@ -4,10 +4,10 @@
 
 **Blocked by:** 05 — Plan a local explicit-color Profile.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Built-in and supported local named themes resolve through one adapter.
-- [ ] Only managed colors enter the Environment Manifest.
-- [ ] Theme Resolution Content digest and provenance follow RFC 0005.
-- [ ] Equal managed colors deduplicate Environment identity while preserving distinct theme names in Activation provenance.
-- [ ] Missing or malformed themes fail planning without partial Plan.
+- [x] Built-in and supported local named themes resolve through one adapter.
+- [x] Only managed colors enter the Environment Manifest.
+- [x] Theme Resolution Content digest and provenance follow RFC 0005.
+- [x] Equal managed colors deduplicate Environment identity while preserving distinct theme names in Activation provenance.
+- [x] Missing or malformed themes fail planning without partial Plan.
