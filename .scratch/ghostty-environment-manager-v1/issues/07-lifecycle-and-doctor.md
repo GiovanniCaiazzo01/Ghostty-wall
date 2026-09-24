@@ -4,10 +4,10 @@
 
 **Blocked by:** 06 — Apply and replay local Environments.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Doctor reports verified, failed, and unavailable checks without mutation.
-- [ ] Repair never synthesizes missing authoritative or durable state where loss may have occurred.
-- [ ] Legacy migration preflights every entry, updates each file atomically, resumes idempotently, and preserves legacy files.
-- [ ] Uninstall removes owned integration and disposable state while preserving Intent, Assets, Environments, and History.
-- [ ] Unsafe ownership, symlinks, permissions, or filesystem capabilities fail closed.
+- [x] Doctor reports verified, failed, and unavailable checks without mutation.
+- [x] Repair never synthesizes missing authoritative or durable state where loss may have occurred.
+- [x] Legacy migration preflights every entry, updates each file atomically, resumes idempotently, and preserves legacy files.
+- [x] Uninstall removes owned integration and disposable state while preserving Intent, Assets, Environments, and History.
+- [x] Unsafe ownership, symlinks, permissions, or filesystem capabilities fail closed.
