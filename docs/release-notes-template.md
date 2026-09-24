@@ -1,7 +1,9 @@
-# Ghostty Wall v1 Release Notes
+# Ghostty Wall v1.0.1 — Linux
 
 ## Summary
 
+- Fresh `init` now installs a working `welcome` Profile and bundled wallpaper; run `ghostty-wall plan welcome` then `ghostty-wall apply welcome` without creating files. Existing installations remain unchanged.
+- Project mascot is included in the README and Linux release archive.
 - Rust v1 Profile-to-Environment workflow: init, plan, apply, previous, doctor, and terminal browser.
 - Durable immutable Environments, content-addressed Assets, append-only Activation History, and recoverable Ghostty Projection.
 - Local-directory and commit-pinned GitHub Sources; explicit, theme, and generated colors.
@@ -10,7 +12,7 @@
 
 Linux x86_64 release archive includes binary and `install-v1.sh`. Verify matching SHA-256 checksum before installing.
 
-macOS support remains experimental and requires source build.
+macOS support remains experimental and requires source build. Real-system reports: https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/5.
 
 ## Verification
 

@@ -42,5 +42,5 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           name="ghostty-wall-${VERSION}-x86_64-unknown-linux-gnu"
-          gh release view "$VERSION" >/dev/null 2>&1 || gh release create "$VERSION" --verify-tag --generate-notes --title "Ghostty Wall $VERSION"
+          gh release view "$VERSION" >/dev/null 2>&1 || gh release create "$VERSION" --verify-tag --notes-file docs/release-notes-template.md --title "Ghostty Wall $VERSION"
           gh release upload "$VERSION" "$name.tar.gz" "$name.tar.gz.sha256" --clobber

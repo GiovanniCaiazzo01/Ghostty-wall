@@ -4,18 +4,18 @@
 
 Ghostty Wall v1 is a Rust CLI for reproducible Ghostty visual Environments. Profiles resolve wallpaper Sources, colors, and supported terminal settings into immutable Environments with durable local History.
 
-Linux support is stable. macOS support is **experimental** pending real-system verification in issue 14. Windows is unsupported.
+Linux support is stable. macOS support is **experimental** pending [real-system verification](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/5). Windows is unsupported.
 
 ## Install
 
 ### Linux release artifact
 
-Download `ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz` and its `.sha256` file from the GitHub Release, then:
+Download `ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz` and its `.sha256` file from the GitHub Release, then:
 
 ```bash
-sha256sum --check ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
-cd ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu
+sha256sum --check ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz
+cd ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu
 ./install-v1.sh
 ```
 
