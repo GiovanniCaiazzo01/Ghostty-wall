@@ -22,7 +22,7 @@ use crate::{
         WallpaperIntent,
     },
     github::GithubHttpClient,
-    init::{InitPaths, dry_run, init, init_repair},
+    init::{InitPaths, dry_run, init, init_repair, init_welcome},
     lifecycle::{CheckStatus, doctor, migrate_legacy, uninstall},
     plan::{
         PlanError, PlanPlatform, plan_github_profile_json, plan_github_profile_with_theme_json,
@@ -41,7 +41,7 @@ const HELP: &str = concat!(
     "Ghostty Wall ",
     env!("CARGO_PKG_VERSION"),
     "\n\nUsage:\n",
-    "  ghostty-wall init [--dry-run | --repair | --migrate-legacy]\n",
+    "  ghostty-wall init [--dry-run | --repair | --migrate-legacy | --welcome]\n",
     "  ghostty-wall plan PROFILE [--seed HEX] [--json]\n",
     "  ghostty-wall apply PROFILE [--seed HEX]\n",
     "  ghostty-wall previous\n",
@@ -95,6 +95,7 @@ fn command_init(args: &[String], output: &mut impl Write) -> Result<(), CliError
         [] => print_init_report(init(&paths)?, output),
         [flag] if flag == "--dry-run" => print_init_report(dry_run(&paths)?, output),
         [flag] if flag == "--repair" => print_init_report(init_repair(&paths)?, output),
+        [flag] if flag == "--welcome" => print_init_report(init_welcome(&paths)?, output),
         [flag] if flag == "--migrate-legacy" => {
             let report = migrate_legacy(&paths, false)?;
             writeln!(

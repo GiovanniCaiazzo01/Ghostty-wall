@@ -3,23 +3,33 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+OS="$(uname -s)"
 
-# shellcheck source-path=SCRIPTDIR
-# shellcheck source=mac/install-mac.sh
-source "$SCRIPT_DIR/mac/install-mac.sh"
-# shellcheck source-path=SCRIPTDIR
-# shellcheck source=linux/install-linux.sh
-source "$SCRIPT_DIR/linux/install-linux.sh"
+case "$OS" in
+  Linux) ;;
+  Darwin) printf 'Warning: macOS support is experimental.\n' >&2 ;;
+  *) printf 'Unsupported operating system: %s\n' "$OS" >&2; exit 1 ;;
+esac
 
-detect_os() {
-  case "$(uname)" in
-    Darwin) install_mac ;;
-    Linux) install_linux ;;
-    *)
-      printf 'Unsupported operating system: %s\n' "$(uname)" >&2
-      exit 1
-      ;;
-  esac
-}
+PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
+DEST="$PREFIX/bin/ghostty-wall"
+SOURCE="${GHOSTTY_WALL_BINARY:-}"
 
-detect_os
+if [ -z "$SOURCE" ] && [ -x "$SCRIPT_DIR/ghostty-wall" ]; then
+  SOURCE="$SCRIPT_DIR/ghostty-wall"
+elif [ -z "$SOURCE" ] && [ -x "$REPO_ROOT/target/release/ghostty-wall" ]; then
+  SOURCE="$REPO_ROOT/target/release/ghostty-wall"
+elif [ -z "$SOURCE" ]; then
+  command -v cargo >/dev/null 2>&1 || {
+    printf 'No release binary found and cargo is unavailable.\n' >&2
+    exit 1
+  }
+  cargo build --locked --release --manifest-path "$REPO_ROOT/Cargo.toml"
+  SOURCE="$REPO_ROOT/target/release/ghostty-wall"
+fi
+
+[ -x "$SOURCE" ] || { printf 'Not an executable: %s\n' "$SOURCE" >&2; exit 1; }
+install -d "$PREFIX/bin"
+install -m 0755 "$SOURCE" "$DEST"
+printf 'Installed %s\n' "$DEST"
+printf 'Next: %s init\n' "$DEST"
