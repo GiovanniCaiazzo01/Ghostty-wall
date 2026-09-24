@@ -16,6 +16,7 @@ pub mod history;
 pub mod init;
 /// Installation diagnosis, legacy migration, and safe uninstall.
 pub mod lifecycle;
+mod palette;
 /// Read-only planning.
 pub mod plan;
 /// Read-only synchronized Recovery Inspection.

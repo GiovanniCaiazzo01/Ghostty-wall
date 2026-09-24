@@ -430,6 +430,7 @@ fn plan_profile_json_inner(
             diagnostics.push(json!({ "code": code, "severity": "warning" }));
         }
     }
+    let mut selected_asset_bytes = None;
     let (wallpaper, source_json, selection_json, asset_json) = match &profile.wallpaper {
         Some(WallpaperIntent::None) => (
             Some(crate::domain::WallpaperManifest::None),
@@ -490,6 +491,8 @@ fn plan_profile_json_inner(
             if let Some(value) = repeat {
                 image = image.with_repeat(*value);
             }
+            let byte_length = resolved.bytes.len();
+            selected_asset_bytes = Some(resolved.bytes);
             (
                 Some(crate::domain::WallpaperManifest::Image(image)),
                 Some(resolved.source),
@@ -497,7 +500,7 @@ fn plan_profile_json_inner(
                 Some(json!({
                     "sha256": asset_sha256.to_string(),
                     "media_type": media_type.as_str(),
-                    "byte_length": resolved.bytes.len(),
+                    "byte_length": byte_length,
                 })),
             )
         }
@@ -533,9 +536,17 @@ fn plan_profile_json_inner(
             ),
             Some(theme.as_str()),
         ),
-        Some(ColorsIntent::Generated) => {
-            return Err(PlanError::Unsupported("generated colors not implemented"));
-        }
+        Some(ColorsIntent::Generated) => (
+            Some(
+                crate::palette::generate_kmeans_v1(
+                    selected_asset_bytes
+                        .as_deref()
+                        .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
+                )
+                .map_err(|_| PlanError::UnsupportedImage)?,
+            ),
+            None,
+        ),
         None => (None, None),
     };
     let terminal = profile
@@ -594,16 +605,20 @@ fn plan_profile_json_inner(
     insert_optional(&mut plan, "source", source_json);
     insert_optional(&mut plan, "selection", selection_json);
     insert_optional(&mut plan, "asset", asset_json);
-    let color_resolution = if let Some(theme) = theme_name {
-        Some(json!({
-            "kind": "theme",
-            "theme": theme,
-            "content_sha256": theme_content_digest(&manifest_json["colors"])?.to_string(),
-        }))
-    } else if profile.colors.is_some() {
-        Some(json!({ "kind": "explicit" }))
-    } else {
-        None
+    let color_resolution = match &profile.colors {
+        Some(ColorsIntent::Generated) => {
+            Some(json!({ "kind": "generated", "algorithm": "kmeans-v1" }))
+        }
+        Some(ColorsIntent::Theme { .. }) => {
+            let theme = theme_name.ok_or(PlanError::Unsupported("missing theme provenance"))?;
+            Some(json!({
+                "kind": "theme",
+                "theme": theme,
+                "content_sha256": theme_content_digest(&manifest_json["colors"])?.to_string(),
+            }))
+        }
+        Some(ColorsIntent::Explicit { .. }) => Some(json!({ "kind": "explicit" })),
+        None => None,
     };
     insert_optional(&mut plan, "color_resolution", color_resolution);
     Ok(plan)
