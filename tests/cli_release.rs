@@ -168,7 +168,7 @@ fn v1_installer_installs_rust_binary() {
     assert_success(&version);
     assert_eq!(
         String::from_utf8_lossy(&version.stdout),
-        "ghostty-wall 1.0.0\n"
+        format!("ghostty-wall {}\n", env!("CARGO_PKG_VERSION"))
     );
 
     fs::remove_dir_all(home).unwrap();
