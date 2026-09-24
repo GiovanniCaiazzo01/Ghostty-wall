@@ -13,7 +13,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Run live GitHub integration test
+      - name: Run v0 live GitHub integration test
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/integration-test.sh
+      - name: Run Rust GitHub Source integration test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo test --test github_live -- --ignored
