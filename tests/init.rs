@@ -25,6 +25,18 @@ fn dry_run_reports_paths_without_writing() {
             .iter()
             .any(|item| item.contains("config.toml"))
     );
+    assert!(
+        report
+            .mutations
+            .iter()
+            .any(|item| item.contains("profiles/welcome.toml"))
+    );
+    assert!(
+        report
+            .mutations
+            .iter()
+            .any(|item| item.contains("profiles/welcome.png"))
+    );
     assert!(!paths.home.exists());
 }
 
@@ -105,7 +117,12 @@ fn init_creates_layout_default_intent_marker_and_hook() {
     }
     assert_eq!(
         fs::read_to_string(root.join("config.toml")).unwrap(),
-        "schema_version = 1\n\n[sources]\n"
+        "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n"
+    );
+    assert!(root.join("profiles/welcome.toml").is_file());
+    assert_eq!(
+        fs::read(root.join("profiles/welcome.png")).unwrap(),
+        include_bytes!("../media/welcome.png")
     );
     assert!(root.join("state.lock").is_file());
     assert!(
@@ -159,6 +176,22 @@ fn repeated_init_is_noop_for_existing_files() {
         root_before
     );
     assert_eq!(fs::metadata(hook).unwrap().modified().unwrap(), hook_before);
+}
+
+#[test]
+fn existing_install_never_recreates_or_overwrites_example() {
+    let paths = test_paths("edited-example");
+    init(&paths).unwrap();
+    let root = paths.managed_root();
+    fs::write(root.join("profiles/welcome.toml"), "schema_version = 1\n").unwrap();
+    fs::remove_file(root.join("profiles/welcome.png")).unwrap();
+
+    assert!(init(&paths).unwrap().mutations.is_empty());
+    assert_eq!(
+        fs::read_to_string(root.join("profiles/welcome.toml")).unwrap(),
+        "schema_version = 1\n"
+    );
+    assert!(!root.join("profiles/welcome.png").exists());
 }
 
 #[test]
@@ -334,6 +367,31 @@ fn repair_completes_pristine_interrupted_first_init_only() {
     assert!(!root.join(".config.toml-in-progress").exists());
     assert!(root.join("state.lock").is_file());
     assert!(!root.join(".init-in-progress").exists());
+    assert!(root.join("profiles/welcome.toml").is_file());
+    assert!(root.join("profiles/welcome.png").is_file());
+
+    let partial = test_paths("interrupted-with-example");
+    let partial_root = partial.managed_root();
+    fs::create_dir_all(partial_root.join("profiles")).unwrap();
+    fs::write(partial_root.join(".init-in-progress"), b"").unwrap();
+    fs::write(
+        partial_root.join("profiles/welcome.png"),
+        include_bytes!("../media/welcome.png"),
+    )
+    .unwrap();
+    init_repair(&partial).unwrap();
+    assert!(partial_root.join("profiles/welcome.toml").is_file());
+
+    let altered = test_paths("interrupted-with-altered-example");
+    let altered_root = altered.managed_root();
+    fs::create_dir_all(altered_root.join("profiles")).unwrap();
+    fs::write(altered_root.join(".init-in-progress"), b"").unwrap();
+    fs::write(altered_root.join("profiles/welcome.png"), b"user data").unwrap();
+    assert!(init_repair(&altered).is_err());
+    assert_eq!(
+        fs::read(altered_root.join("profiles/welcome.png")).unwrap(),
+        b"user data"
+    );
 
     let damaged = test_paths("interrupted-with-records");
     let root = damaged.managed_root();

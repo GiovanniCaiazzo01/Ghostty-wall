@@ -23,7 +23,7 @@ Confirm CI and Integration workflows pass exact commit to tag.
 
 1. Build `cargo build --locked --release` on clean x86_64 GNU/Linux runner.
 2. Run `GHOSTTY_WALL_BINARY="$PWD/target/release/ghostty-wall" INSTALL_PREFIX="$tmp/prefix" ./scripts/install-v1.sh`.
-3. Confirm installed binary reports `ghostty-wall 1.0.0`.
+3. Confirm installed binary reports `ghostty-wall 1.0.1`.
 4. With temporary `HOME` and `XDG_CONFIG_HOME`, run `init --dry-run`, `init`, and `doctor`.
 5. Create local Source plus generated-colors Profile; run `plan PROFILE --json` and `apply PROFILE`.
 6. Apply second time, run `previous`, and verify contiguous Activation records plus `current.ghostty`.
@@ -53,9 +53,9 @@ Do not call macOS stable until issue 14 has repeatable real-system evidence.
 
 ## Artifact verification
 
-1. Tag exactly `v1.0.0` after all gates pass.
+1. Tag exactly `v1.0.1` after all gates pass.
 2. Release workflow must publish:
-   - `ghostty-wall-v1.0.0-x86_64-unknown-linux-gnu.tar.gz`;
+   - `ghostty-wall-v1.0.1-x86_64-unknown-linux-gnu.tar.gz`;
    - matching `.sha256` file.
 3. Download both from GitHub Release and verify `sha256sum --check`.
 4. Extract archive and run bundled `./install-v1.sh` in clean temporary home.
