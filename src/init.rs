@@ -12,7 +12,7 @@ use thiserror::Error;
 const OLD_DEFAULT_CONFIG: &str = "schema_version = 1\n\n[sources]\n";
 const DEFAULT_CONFIG: &str =
     "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n";
-const WELCOME_PROFILE: &str = "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\n\n[colors]\nmode = \"generated\"\n";
+const WELCOME_PROFILE: &str = "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n";
 const WELCOME_IMAGE: &[u8] = include_bytes!("../media/welcome.png");
 const HOOK_LINE: &str = "config-file = ?";
 
