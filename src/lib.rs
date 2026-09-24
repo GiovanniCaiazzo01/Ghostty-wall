@@ -8,6 +8,8 @@ pub mod apply;
 pub mod codec;
 /// Validated domain types defined by the accepted RFCs.
 pub mod domain;
+/// Commit-pinned GitHub API adapter boundary.
+pub mod github;
 /// Read-only validated local History inspection.
 pub mod history;
 /// Managed Root initialization.
