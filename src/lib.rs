@@ -12,6 +12,8 @@ pub mod domain;
 pub mod history;
 /// Managed Root initialization.
 pub mod init;
+/// Installation diagnosis, legacy migration, and safe uninstall.
+pub mod lifecycle;
 /// Read-only planning.
 pub mod plan;
 /// Read-only synchronized Recovery Inspection.
