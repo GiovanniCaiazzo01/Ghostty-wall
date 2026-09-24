@@ -490,6 +490,42 @@ fn plan_local_profile_json_inner(
     Ok(plan)
 }
 
+pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>, PlanError> {
+    let Some(source) = plan.get("source") else {
+        return Ok(None);
+    };
+    if source.get("kind").and_then(Value::as_str) != Some("local-directory") {
+        return Err(PlanError::Unsupported(
+            "only local-directory Sources implemented",
+        ));
+    }
+    let root = source
+        .get("resolved_root")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or(PlanError::Unsupported("invalid planned Source"))?;
+    let candidate = plan
+        .get("selection")
+        .and_then(|value| value.get("candidate"))
+        .and_then(Value::as_str)
+        .ok_or(PlanError::Unsupported("invalid planned Selection"))?
+        .parse::<CandidatePath>()
+        .map_err(|_| PlanError::Unsupported("invalid planned Candidate"))?;
+    let root_file = open_source_root(&root)?;
+    let bytes = read_candidate(&root, &root_file, &candidate)?;
+    let asset = plan
+        .get("asset")
+        .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
+    if asset.get("sha256").and_then(Value::as_str) != Some(&sha256(&bytes).to_string())
+        || asset.get("byte_length").and_then(Value::as_u64) != Some(bytes.len() as u64)
+        || asset.get("media_type").and_then(Value::as_str)
+            != Some(detect_media_type(&bytes)?.as_str())
+    {
+        return Err(PlanError::SourceDrift);
+    }
+    Ok(Some(bytes))
+}
+
 fn resolve_local_root(
     config_dir: &Path,
     home: &Path,
@@ -747,7 +783,11 @@ fn validate_store_dirs(paths: &[PathBuf]) -> Result<(), PlanError> {
     Ok(())
 }
 
-fn asset_disposition(root: &Path, digest: &str, media: &str) -> Result<&'static str, PlanError> {
+pub(crate) fn asset_disposition(
+    root: &Path,
+    digest: &str,
+    media: &str,
+) -> Result<&'static str, PlanError> {
     let store = root.join("assets/sha256");
     validate_store_dirs(&[root.to_owned(), root.join("assets"), store.clone()])?;
     if let Ok(meta) = fs::symlink_metadata(&store) {
@@ -828,7 +868,7 @@ struct EnvironmentRecord<'a> {
     manifest: &'a serde_json::value::RawValue,
 }
 
-fn environment_disposition(root: &Path, id: &str) -> Result<&'static str, PlanError> {
+pub(crate) fn environment_disposition(root: &Path, id: &str) -> Result<&'static str, PlanError> {
     validate_store_dirs(&[root.to_owned(), root.join("environments")])?;
     let path = root.join("environments").join(format!("{id}.json"));
     match fs::symlink_metadata(&path) {
