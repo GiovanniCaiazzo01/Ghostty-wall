@@ -7,6 +7,24 @@ use std::{
 };
 
 #[test]
+fn fresh_init_provides_working_welcome_profile() {
+    let home = temp_dir("welcome");
+    let config_home = home.join("config");
+    assert_success(&run(&home, &config_home, &["init"]));
+    let root = config_home.join("ghostty/ghostty-wall");
+    assert!(root.join("profiles/welcome.toml").is_file());
+    assert!(root.join("profiles/welcome.png").is_file());
+
+    let plan = run(&home, &config_home, &["plan", "welcome", "--json"]);
+    assert_success(&plan);
+    let plan: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(plan["profile"]["id"], "welcome");
+    assert_success(&run(&home, &config_home, &["apply", "welcome"]));
+    assert_success(&run(&home, &config_home, &["doctor"]));
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn cli_runs_profile_to_environment_workflow() {
     let home = temp_dir("workflow");
     let config_home = home.join("config");

@@ -1,5 +1,7 @@
 # Ghostty Wall
 
+<img src="media/mascot.png" alt="Ghostty Wall mascot" width="180">
+
 Ghostty Wall v1 is a Rust CLI for reproducible Ghostty visual Environments. Profiles resolve wallpaper Sources, colors, and supported terminal settings into immutable Environments with durable local History.
 
 Linux support is stable. macOS support is **experimental** pending real-system verification in issue 14. Windows is unsupported.
@@ -37,12 +39,17 @@ Installer builds with `cargo build --locked --release` when no release binary is
 
 ## First workflow
 
-Initialize Managed Root and one optional Ghostty Integration Hook:
+Initialize Managed Root and one optional Ghostty Integration Hook. Fresh installs include the `welcome` Profile and bundled wallpaper, ready to plan and apply:
 
 ```bash
 ghostty-wall init --dry-run
 ghostty-wall init
+ghostty-wall plan welcome --json
+ghostty-wall apply welcome
+ghostty-wall doctor
 ```
+
+Existing installations are preserved: rerunning `init` does not overwrite Intent or add the example to an already-published Managed Root.
 
 Linux Managed Root:
 
@@ -50,17 +57,15 @@ Linux Managed Root:
 ${XDG_CONFIG_HOME:-$HOME/.config}/ghostty/ghostty-wall
 ```
 
-Create local Source in `config.toml`:
+To use your own wallpaper instead, edit `config.toml` inside the Managed Root and add a local Source (replace example path with a real directory):
 
 ```toml
-schema_version = 1
-
 [sources.wallpapers]
 kind = "local-directory"
 path = "~/Pictures/wallpapers"
 ```
 
-Create `profiles/night.toml`:
+Create `<Managed Root>/profiles/night.toml` (replace `city/night.png` with an image inside your Source):
 
 ```toml
 schema_version = 1
@@ -83,12 +88,11 @@ background_opacity = 0.94
 cursor_style = "bar"
 ```
 
-Plan without mutation, apply, inspect health, then navigate History:
+Plan without mutation, apply, and navigate History:
 
 ```bash
 ghostty-wall plan night --json
 ghostty-wall apply night
-ghostty-wall doctor
 ghostty-wall previous
 ```
 
