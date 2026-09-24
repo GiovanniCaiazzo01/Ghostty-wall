@@ -4,6 +4,8 @@
 
 /// Durable Profile apply and History replay.
 pub mod apply;
+/// Process command-line interface.
+pub mod cli;
 /// Encoding and decoding of public and persisted protocols.
 pub mod codec;
 /// Validated domain types defined by the accepted RFCs.

@@ -399,6 +399,34 @@ pub fn plan_github_profile_json(
     )
 }
 
+/// Produces complete RFC 0005 Plan JSON with GitHub Source and named-theme support.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_github_profile_with_theme_json(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    platform: &PlanPlatform,
+    github: &dyn GithubApi,
+    themes: &dyn ThemeResolver,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        Some(platform),
+        Some(github),
+        Some(themes),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn plan_profile_json_inner(
     config_dir: &Path,
