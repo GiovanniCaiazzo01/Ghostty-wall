@@ -21,6 +21,8 @@ mod palette;
 pub mod plan;
 /// Read-only synchronized Recovery Inspection.
 pub mod recovery;
+/// Best-effort Ghostty runtime reload adapters.
+pub mod runtime;
 /// Pure, versioned Candidate Selection Algorithms.
 pub mod selection;
 /// Read-only named Ghostty theme resolution.

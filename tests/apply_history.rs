@@ -10,7 +10,9 @@ use ghostty_wall::{
     codec::intent::{parse_config_toml, parse_profile_toml},
     domain::IntentId,
     history::{HistoryError, inspect_history},
+    plan::ReloadUnavailableReason,
     recovery::{ProjectionState, inspect_recovery_state, reconcile_recovery_state},
+    runtime::{ReloadFailure, ReloadOutcome, UnavailableReload},
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -62,10 +64,13 @@ impl Root {
             &profile,
             None,
             timestamp,
-            || Err::<(), _>("Ghostty not running"),
+            UnavailableReload::new(ReloadUnavailableReason::GhosttyIntegrationUnavailable),
         )
         .unwrap();
-        assert!(!outcome.reload_succeeded());
+        assert_eq!(
+            outcome.reload_outcome(),
+            ReloadOutcome::Unavailable(ReloadUnavailableReason::GhosttyIntegrationUnavailable)
+        );
     }
 }
 
@@ -90,6 +95,40 @@ fn apply_commits_each_profile_event_before_best_effort_reload() {
             .unwrap()
             .projection(),
         ProjectionState::Consistent
+    );
+}
+
+#[test]
+fn failed_reload_is_reported_after_activation_commit() {
+    let root = Root::new();
+    let config = parse_config_toml("schema_version = 1\n[sources]\n").unwrap();
+    let profile = parse_profile_toml("schema_version = 1\n").unwrap();
+
+    let outcome = apply_local_profile(
+        &root.base,
+        &root.base,
+        &root.managed,
+        &root.root_config,
+        &IntentId::from_str("one").unwrap(),
+        &config,
+        &profile,
+        None,
+        "2026-09-23T08:31:15.123456Z",
+        || Err::<(), _>("reload failed"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome.reload_outcome(),
+        ReloadOutcome::Failed(ReloadFailure::Reload)
+    );
+    assert_eq!(
+        inspect_history(&root.managed)
+            .unwrap()
+            .latest()
+            .unwrap()
+            .sequence(),
+        1
     );
 }
 
