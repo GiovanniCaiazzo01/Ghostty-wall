@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::{
     domain::{EnvironmentManifest, WallpaperManifest},
     history::{HistoryError, inspect_history_unlocked},
-    init::hook_count,
+    init::{hook_count, legacy_hook_count},
 };
 
 /// Managed Projection state relative to committed History.
@@ -266,7 +266,14 @@ pub(crate) fn inspect_integration_hook(
     let Ok(text) = String::from_utf8(bytes) else {
         return Err(RecoveryError::IntegrationDrift(config.to_owned()));
     };
-    if !unchanged || hook_count(&text, &target, projection) != 1 {
+    let legacy_projection = config
+        .parent()
+        .unwrap_or(Path::new("/"))
+        .join("wallpaper.conf");
+    if !unchanged
+        || hook_count(&text, &target, projection) != 1
+        || legacy_hook_count(&text, &target, &legacy_projection) != 0
+    {
         return Err(RecoveryError::IntegrationDrift(config.to_owned()));
     }
     Ok(())

@@ -22,7 +22,7 @@ pub struct InitPaths {
 }
 
 impl InitPaths {
-    fn xdg_config_home(&self) -> PathBuf {
+    pub(crate) fn xdg_config_home(&self) -> PathBuf {
         self.xdg_config_home
             .clone()
             .unwrap_or_else(|| self.home.join(".config"))
@@ -42,7 +42,7 @@ impl InitPaths {
             .join("Library/Application Support/com.mitchellh.ghostty")
     }
 
-    fn ghostty_candidates(&self) -> Vec<PathBuf> {
+    pub(crate) fn ghostty_candidates(&self) -> Vec<PathBuf> {
         let xdg = self.xdg_config_home().join("ghostty");
         let mut candidates = vec![xdg.join("config.ghostty"), xdg.join("config")];
         if cfg!(target_os = "macos") {
@@ -52,7 +52,7 @@ impl InitPaths {
         candidates
     }
 
-    fn ghostty_root_config(&self) -> PathBuf {
+    pub(crate) fn ghostty_root_config(&self) -> PathBuf {
         let candidates = self.ghostty_candidates();
         candidates
             .iter()
@@ -170,10 +170,26 @@ pub fn init(paths: &InitPaths) -> Result<InitReport, InitError> {
     init_with_publish(paths, probe_capabilities, sync_managed_root)
 }
 
+pub(crate) fn init_with_config(
+    paths: &InitPaths,
+    initial_config: &[u8],
+) -> Result<InitReport, InitError> {
+    init_with_publish_config(paths, probe_capabilities, sync_managed_root, initial_config)
+}
+
 fn init_with_publish(
     paths: &InitPaths,
     probe: fn(&Path) -> Result<(), InitError>,
     publish: fn(&Path) -> Result<(), InitError>,
+) -> Result<InitReport, InitError> {
+    init_with_publish_config(paths, probe, publish, DEFAULT_CONFIG.as_bytes())
+}
+
+fn init_with_publish_config(
+    paths: &InitPaths,
+    probe: fn(&Path) -> Result<(), InitError>,
+    publish: fn(&Path) -> Result<(), InitError>,
+    initial_config: &[u8],
 ) -> Result<InitReport, InitError> {
     if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Err(InitError::UnsupportedPlatform);
@@ -229,7 +245,7 @@ fn init_with_publish(
         ] {
             ensure_dir(&managed_root.join(dir), &mut mutations, &mut created)?;
         }
-        ensure_default_config(&managed_root, &mut mutations, &mut created)?;
+        ensure_default_config(&managed_root, initial_config, &mut mutations, &mut created)?;
         if first_init {
             probe(&managed_root)?;
         }
@@ -716,7 +732,12 @@ fn resume_first_init(
         ] {
             ensure_dir(&root.join(dir), &mut mutations, &mut created)?;
         }
-        ensure_default_config(root, &mut mutations, &mut created)?;
+        ensure_default_config(
+            root,
+            DEFAULT_CONFIG.as_bytes(),
+            &mut mutations,
+            &mut created,
+        )?;
         probe_capabilities(root)?;
         ensure_file(&root.join("state.lock"), b"", &mut mutations, &mut created)?;
         _published_lock = Some(lock_state(&root.join("state.lock"))?);
@@ -930,7 +951,7 @@ fn required_paths(root: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
-fn preflight_layout(root: &Path) -> Result<(), InitError> {
+pub(crate) fn preflight_layout(root: &Path) -> Result<(), InitError> {
     let existing = match fs::symlink_metadata(root) {
         Ok(metadata) => {
             validate_existing(root, &metadata, true)?;
@@ -988,7 +1009,11 @@ fn preflight_layout(root: &Path) -> Result<(), InitError> {
 }
 
 #[cfg(unix)]
-fn validate_existing(path: &Path, metadata: &fs::Metadata, dir: bool) -> Result<(), InitError> {
+pub(crate) fn validate_existing(
+    path: &Path,
+    metadata: &fs::Metadata,
+    dir: bool,
+) -> Result<(), InitError> {
     use std::os::unix::fs::MetadataExt;
     if metadata.file_type().is_symlink() {
         return Err(InitError::Symlink(path.to_owned()));
@@ -1004,7 +1029,11 @@ fn validate_existing(path: &Path, metadata: &fs::Metadata, dir: bool) -> Result<
 }
 
 #[cfg(not(unix))]
-fn validate_existing(path: &Path, _metadata: &fs::Metadata, _dir: bool) -> Result<(), InitError> {
+pub(crate) fn validate_existing(
+    path: &Path,
+    _metadata: &fs::Metadata,
+    _dir: bool,
+) -> Result<(), InitError> {
     Err(InitError::WrongKind(path.to_owned()))
 }
 
@@ -1026,6 +1055,7 @@ fn ensure_dir(
 #[cfg(unix)]
 fn ensure_default_config(
     root: &Path,
+    initial_config: &[u8],
     mutations: &mut Vec<String>,
     created: &mut Vec<Created>,
 ) -> Result<(), InitError> {
@@ -1048,7 +1078,7 @@ fn ensure_default_config(
                 source,
             })?;
         temp_created = true;
-        file.write_all(DEFAULT_CONFIG.as_bytes())
+        file.write_all(initial_config)
             .and_then(|_| file.sync_all())
             .map_err(|source| InitError::Io {
                 path: temp.clone(),
@@ -1077,6 +1107,7 @@ fn ensure_default_config(
 #[cfg(not(unix))]
 fn ensure_default_config(
     root: &Path,
+    _initial_config: &[u8],
     _mutations: &mut Vec<String>,
     _created: &mut Vec<Created>,
 ) -> Result<(), InitError> {
@@ -1167,6 +1198,31 @@ pub(crate) fn hook_count(content: &str, config: &Path, projection: &Path) -> usi
                 config.parent().unwrap_or(Path::new("/")).join(path)
             };
             normalize(&resolved) == normalize(projection)
+        })
+        .count()
+}
+
+pub(crate) fn legacy_hook_count(content: &str, config: &Path, legacy_projection: &Path) -> usize {
+    content
+        .lines()
+        .filter(|line| {
+            let Some(rest) = line.trim().strip_prefix("config-file") else {
+                return false;
+            };
+            if !rest.starts_with(char::is_whitespace) && !rest.starts_with('=') {
+                return false;
+            }
+            let value = rest.trim().strip_prefix('=').unwrap_or(rest.trim()).trim();
+            if value.starts_with('?') || value.is_empty() {
+                return false;
+            }
+            let path = Path::new(value.trim_matches('"'));
+            let resolved = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                config.parent().unwrap_or(Path::new("/")).join(path)
+            };
+            normalize(&resolved) == normalize(legacy_projection)
         })
         .count()
 }
@@ -1314,7 +1370,11 @@ fn probe_capabilities(root: &Path) -> Result<(), InitError> {
 }
 
 #[cfg(unix)]
-fn atomic_edit(root_config: &Path, target: &Path, bytes: &[u8]) -> Result<(), InitError> {
+pub(crate) fn atomic_edit(
+    root_config: &Path,
+    target: &Path,
+    bytes: &[u8],
+) -> Result<(), InitError> {
     atomic_edit_with_hooks(
         root_config,
         target,
@@ -1411,7 +1471,11 @@ fn atomic_edit_with_hooks(
 }
 
 #[cfg(not(unix))]
-fn atomic_edit(_root_config: &Path, target: &Path, _bytes: &[u8]) -> Result<(), InitError> {
+pub(crate) fn atomic_edit(
+    _root_config: &Path,
+    target: &Path,
+    _bytes: &[u8],
+) -> Result<(), InitError> {
     Err(InitError::WrongKind(target.to_owned()))
 }
 
