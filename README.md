@@ -10,7 +10,7 @@ Ghostty Wall can generate terminal colors from your wallpaper, preview changes b
 **macOS:** experimental  
 **Windows:** unsupported
 
-> Full configuration reference: [User Guide](docs/user-guide.md)
+> Documentation: [website](https://giovannicaiazzo01.github.io/Ghostty-wall/) · [User Guide](docs/user-guide.md)
 
 ## Install
 
