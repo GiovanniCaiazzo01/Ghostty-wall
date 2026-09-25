@@ -21,6 +21,7 @@ jobs:
           cargo clippy --all-targets --all-features -- -D warnings
           cargo test --all-targets --all-features
           bash scripts/test.sh
+          bash scripts/test-install-release.sh
       - name: Build locked release binary
         run: cargo build --locked --release
       - name: Package Linux artifact
@@ -36,6 +37,9 @@ jobs:
           cp media/mascot.png "$name/media/"
           tar -czf "$name.tar.gz" "$name"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          alias="ghostty-wall-x86_64-unknown-linux-gnu.tar.gz"
+          cp "$name.tar.gz" "$alias"
+          sha256sum "$alias" > "$alias.sha256"
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,4 +47,5 @@ jobs:
         run: |
           name="ghostty-wall-${VERSION}-x86_64-unknown-linux-gnu"
           gh release view "$VERSION" >/dev/null 2>&1 || gh release create "$VERSION" --verify-tag --notes-file docs/release-notes-template.md --title "Ghostty Wall $VERSION"
-          gh release upload "$VERSION" "$name.tar.gz" "$name.tar.gz.sha256" --clobber
+          alias="ghostty-wall-x86_64-unknown-linux-gnu.tar.gz"
+          gh release upload "$VERSION" "$name.tar.gz" "$name.tar.gz.sha256" "$alias" "$alias.sha256" --clobber
