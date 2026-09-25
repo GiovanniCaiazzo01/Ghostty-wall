@@ -46,6 +46,12 @@ prefix="${INSTALL_PREFIX:-$HOME/.local}"
 bin_dir="$prefix/bin"
 install -d "$bin_dir"
 install -m 0755 "${binaries[0]}" "$bin_dir/ghostty-wall"
+# Ownership proof prevents self-update from replacing an unrelated installation.
+marker_tmp="$(mktemp "$bin_dir/.ghostty-wall-release.sha256.XXXXXX")"
+trap 'rm -rf "$tmp_dir"; rm -f "$marker_tmp"' EXIT
+(cd "$bin_dir" && sha256sum ghostty-wall) > "$marker_tmp"
+chmod 0644 "$marker_tmp"
+mv "$marker_tmp" "$bin_dir/.ghostty-wall-release.sha256"
 printf 'Installed ghostty-wall to %s/ghostty-wall\n' "$bin_dir"
 
 # Compare resolved directories so PATH entries with trailing slashes or symlinks count.

@@ -35,6 +35,7 @@ use crate::{
         TerminalGraphics,
     },
     theme::ThemeFileResolver,
+    update::{self, UpdateError},
 };
 
 const HELP: &str = concat!(
@@ -47,7 +48,8 @@ const HELP: &str = concat!(
     "  ghostty-wall previous\n",
     "  ghostty-wall doctor\n",
     "  ghostty-wall tui [--seed HEX]\n",
-    "  ghostty-wall uninstall\n"
+    "  ghostty-wall uninstall\n",
+    "  ghostty-wall update [--check]\n"
 );
 const MAX_INTENT_BYTES: u64 = 1024 * 1024;
 
@@ -85,7 +87,18 @@ fn execute(
         [command] if command == "doctor" => command_doctor(output),
         [command, rest @ ..] if command == "tui" => command_tui(rest, output, input_errors),
         [command] if command == "uninstall" => command_uninstall(output),
+        [command, rest @ ..] if command == "update" => {
+            update::run(parse_update_options(rest)?, output).map_err(CliError::Update)
+        }
         _ => Err(CliError::Usage("unknown command or option".into())),
+    }
+}
+
+fn parse_update_options(args: &[String]) -> Result<bool, CliError> {
+    match args {
+        [] => Ok(false),
+        [flag] if flag == "--check" => Ok(true),
+        _ => Err(CliError::Usage("invalid update options".into())),
     }
 }
 
@@ -639,6 +652,7 @@ enum CliError {
     Browser(crate::terminal_browser::BrowserError),
     Preview(crate::terminal_browser::ImagePreviewError),
     Json(serde_json::Error),
+    Update(UpdateError),
 }
 
 impl CliError {
@@ -648,7 +662,11 @@ impl CliError {
             Self::Intent(_) => 3,
             Self::Plan(error) => error.exit_status(),
             Self::JsonPlan(code) => *code,
-            Self::Apply(_) | Self::DoctorFailed | Self::Init(_) | Self::Lifecycle(_) => 6,
+            Self::Apply(_)
+            | Self::DoctorFailed
+            | Self::Init(_)
+            | Self::Lifecycle(_)
+            | Self::Update(_) => 6,
             Self::Internal(_)
             | Self::Io(_)
             | Self::Browser(_)
@@ -673,6 +691,7 @@ impl std::fmt::Display for CliError {
             Self::Browser(error) => error.fmt(formatter),
             Self::Preview(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
+            Self::Update(error) => error.fmt(formatter),
         }
     }
 }
@@ -720,5 +739,19 @@ impl From<crate::terminal_browser::ImagePreviewError> for CliError {
 impl From<serde_json::Error> for CliError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+#[cfg(test)]
+mod update_cli_tests {
+    use super::*;
+
+    #[test]
+    fn update_options() {
+        assert!(!parse_update_options(&[]).unwrap());
+        assert!(parse_update_options(&["--check".into()]).unwrap());
+        assert!(parse_update_options(&["--force".into()]).is_err());
+        assert!(parse_update_options(&["--check".into(), "--force".into()]).is_err());
+        assert!(HELP.contains("ghostty-wall update [--check]"));
     }
 }

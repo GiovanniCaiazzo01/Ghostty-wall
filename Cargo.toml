@@ -4,13 +4,17 @@ version = "1.0.3"
 edition = "2024"
 
 [dependencies]
+flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
 percent-encoding = "2.3.2"
+semver = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_jcs = "0.2.0"
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 sha2 = "0.11.0"
+tar = "0.4"
+tempfile = "3"
 thiserror = "2.0.20"
 toml = "0.8"
 toml_edit = "0.22"

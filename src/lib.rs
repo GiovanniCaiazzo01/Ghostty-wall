@@ -31,3 +31,5 @@ pub mod selection;
 pub mod terminal_browser;
 /// Read-only named Ghostty theme resolution.
 pub mod theme;
+/// Explicit release-owned executable updates.
+pub mod update;

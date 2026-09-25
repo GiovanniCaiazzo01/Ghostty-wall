@@ -39,6 +39,7 @@ assert_clean() { [[ -z "$(find "$TMPDIR" -mindepth 1 -print -quit)" ]] || fail '
 
 bash "$script" > "$root/output" 2>&1 || fail 'default install'
 [[ -x "$HOME/.local/bin/ghostty-wall" ]] || fail 'default destination'
+(cd "$HOME/.local/bin" && sha256sum --check .ghostty-wall-release.sha256) || fail 'release ownership marker'
 grep -qF '/releases/latest/download/' "$URL_LOG" || fail 'latest URL'
 grep -qF 'Warning: ' "$root/output" || fail 'missing PATH warning'
 grep -qF 'ghostty-wall init' "$root/output" || fail 'next steps'

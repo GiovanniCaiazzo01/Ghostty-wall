@@ -74,12 +74,15 @@ ghostty-wall plan welcome
 | `ghostty-wall tui` | Browse, preview, and apply profiles interactively |
 | `ghostty-wall doctor` | Check the installation, integration, and durable state |
 | `ghostty-wall uninstall` | Remove the integration and generated files while preserving profiles and history |
+| `ghostty-wall update` | Check for and install the latest Ghostty Wall release |
 | `ghostty-wall --help` | Show CLI usage |
 | `ghostty-wall --version` | Show the installed version |
 
 `plan`, `apply`, and `tui` accept `--seed HEX` when using profiles with random wallpaper selection.
 
 `plan PROFILE --json` outputs compact machine-readable JSON.
+
+Run `ghostty-wall update --check` to check for a newer release without installing it. Self-updates require a release-installer-owned binary; Cargo and manual installations should use their original installation method.
 
 ## Create a profile
 
