@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.0.3]
+
+### Added
+
+- One-command Linux x86_64 release installer with SHA-256 verification and explicit next steps; initialization remains manual.
+- Stable release archive and checksum aliases alongside versioned artifacts for `/releases/latest/download/`.
+
+### Changed
+
+- Improved welcome profile contrast, desktop reload diagnostics, and user documentation.
+
 ## [1.0.2]
 
 ### Added
