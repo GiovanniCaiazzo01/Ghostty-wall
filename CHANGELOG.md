@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.0.4]
+
+### Added
+
+- Explicit `ghostty-wall update` and read-only `update --check` for official Linux x86_64 releases.
+- SHA-256-verified, atomic executable replacement for release-installer-owned binaries; Cargo and manual installations keep their original update method.
+
 ## [1.0.3]
 
 ### Added

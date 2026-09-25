@@ -1,10 +1,10 @@
-# Ghostty Wall v1.0.3 — Linux
+# Ghostty Wall v1.0.4 — Linux
 
 ## Summary
 
-- Linux x86_64 users can install via the README one-command installer. It verifies the release archive's SHA-256 checksum; run `ghostty-wall init` explicitly afterward.
-- Versioned release artifacts remain available; stable archive and checksum aliases enable `/releases/latest/download/`.
-- Improved welcome profile contrast, desktop reload diagnostics, and user documentation.
+- Linux x86_64 release-installer users can run `ghostty-wall update --check` to check or `ghostty-wall update` to install the latest stable release explicitly.
+- Updates verify the stable release archive's SHA-256 before atomically replacing the current executable; Profiles and Ghostty configuration stay untouched.
+- Cargo and manually installed binaries should use their original installation method. Install this version through the release installer once to establish update ownership.
 - Rust v1 Profile-to-Environment workflow: init, plan, apply, previous, doctor, and terminal browser.
 - Durable immutable Environments, content-addressed Assets, append-only Activation History, and recoverable Ghostty Projection.
 - Local-directory and commit-pinned GitHub Sources; explicit, theme, and generated colors.
