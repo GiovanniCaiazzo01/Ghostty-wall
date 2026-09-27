@@ -32,7 +32,21 @@ type Rgb = [u8; 3];
 #[derive(Debug)]
 pub(crate) struct PaletteError;
 
-pub(crate) fn generate_kmeans_v1(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
+#[cfg(test)]
+fn generate_kmeans_v1(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
+    generate(bytes, false, false)
+}
+
+#[cfg(test)]
+fn generate_kmeans_v2(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
+    generate(bytes, true, false)
+}
+
+pub(crate) fn generate_kmeans_v3(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
+    generate(bytes, true, true)
+}
+
+fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<ColorsManifest, PaletteError> {
     let format = image::guess_format(bytes).map_err(|_| PaletteError)?;
     if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
         return Err(PaletteError);
@@ -70,32 +84,76 @@ pub(crate) fn generate_kmeans_v1(bytes: &[u8]) -> Result<ColorsManifest, Palette
     }
 
     let centers = kmeans(&samples);
-    let background = *centers
+    let center = *centers
         .iter()
         .min_by_key(|color| (luminance(**color), **color))
         .ok_or(PaletteError)?;
-    let foreground = contrasting_text(background);
+    let background = if darken {
+        mix(center, [0, 0, 0], 2, 3)
+    } else {
+        center
+    };
+    let original_foreground = contrasting_text(background);
+    let foreground = if tinted {
+        centers
+            .iter()
+            .copied()
+            .filter(|center| chroma(*center) >= 16)
+            .max_by_key(|center| {
+                (
+                    chroma(*center),
+                    luminance(*center).abs_diff(luminance(background)),
+                    *center,
+                )
+            })
+            .map(|center| readable(background, mix(center, original_foreground, 1, 3)))
+            .unwrap_or(original_foreground)
+    } else {
+        original_foreground
+    };
     let selection_background = mix(background, foreground, 1, 3);
-    let selection_foreground = contrasting_text(selection_background);
+    let selection_foreground = if tinted {
+        readable(selection_background, foreground)
+    } else {
+        contrasting_text(selection_background)
+    };
 
     let mut palette = [[0; 3]; 16];
-    palette[0] = background;
+    palette[0] = if tinted {
+        readable(background, background)
+    } else {
+        background
+    };
     palette[7] = foreground;
-    palette[8] = mix(background, foreground, 1, 3);
+    palette[8] = if tinted {
+        readable(background, selection_background)
+    } else {
+        selection_background
+    };
     palette[15] = foreground;
     for index in 0..6 {
-        palette[index + 1] = mix(
+        let normal = mix(
             nearest(ANSI_NORMAL[index], &centers),
             ANSI_NORMAL[index],
             1,
             2,
         );
-        palette[index + 9] = mix(
+        let bright = mix(
             nearest(ANSI_BRIGHT[index], &centers),
             ANSI_BRIGHT[index],
             1,
             2,
         );
+        palette[index + 1] = if tinted {
+            readable(background, normal)
+        } else {
+            normal
+        };
+        palette[index + 9] = if tinted {
+            readable(background, bright)
+        } else {
+            bright
+        };
     }
 
     Ok(ColorsManifest::new(
@@ -192,6 +250,28 @@ fn mix(base: Rgb, overlay: Rgb, overlay_parts: u16, total_parts: u16) -> Rgb {
     })
 }
 
+fn chroma(color: Rgb) -> u8 {
+    color.into_iter().max().unwrap_or(0) - color.into_iter().min().unwrap_or(0)
+}
+
+fn readable(background: Rgb, candidate: Rgb) -> Rgb {
+    if contrast(background, candidate) >= 4.5 {
+        return candidate;
+    }
+    let extreme = contrasting_text(background);
+    // RFC 0005: find first rounded mix meeting threshold, not an approximate float weight.
+    let (mut low, mut high) = (0_u16, 255_u16);
+    while low < high {
+        let middle = (low + high) / 2;
+        if contrast(background, mix(candidate, extreme, middle, 255)) >= 4.5 {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    mix(candidate, extreme, low, 255)
+}
+
 fn contrasting_text(background: Rgb) -> Rgb {
     let black = [0, 0, 0];
     let white = [255, 255, 255];
@@ -227,4 +307,29 @@ fn luminance(color: Rgb) -> u32 {
 fn color(value: Rgb) -> Result<Color, PaletteError> {
     Color::from_str(&format!("{:02x}{:02x}{:02x}", value[0], value[1], value[2]))
         .map_err(|_| PaletteError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_fixture_stays_byte_compatible_for_historical_provenance() {
+        let colors = generate_kmeans_v1(include_bytes!("../tests/fixtures/palette.png")).unwrap();
+        assert_eq!(colors.background().to_string(), "1a212c");
+        assert_eq!(colors.foreground().to_string(), "ffffff");
+        assert_eq!(colors.palette()[1].to_string(), "c12a2f");
+        assert_eq!(colors.palette()[8].to_string(), "666b72");
+        assert_eq!(colors.palette()[14].to_string(), "219ac7");
+    }
+
+    #[test]
+    fn v2_fixture_stays_byte_compatible_for_historical_provenance() {
+        let colors = generate_kmeans_v2(include_bytes!("../tests/fixtures/palette.png")).unwrap();
+        assert_eq!(colors.background().to_string(), "1a212c");
+        assert_eq!(colors.foreground().to_string(), "eecd6c");
+        assert_eq!(colors.palette()[1].to_string(), "d3666a");
+        assert_eq!(colors.palette()[8].to_string(), "8d8876");
+        assert_eq!(colors.palette()[14].to_string(), "219ac7");
+    }
 }

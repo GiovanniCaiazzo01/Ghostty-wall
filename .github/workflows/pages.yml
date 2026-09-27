@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "Cargo.toml"
+      - "README.md"
+      - "docs/user-guide.md"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -26,8 +29,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Verify site links
-        run: python3 website/test_site.py
+      - name: Generate and verify documentation
+        run: |
+          python3 website/generate.py
+          python3 website/test_site.py
+          git diff --exit-code -- website/dist
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:

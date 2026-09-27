@@ -213,6 +213,31 @@ fn apply_resolved_profile<R: ReloadAdapter>(
     asset_bytes: Option<Vec<u8>>,
 ) -> Result<ApplyOutcome, ApplyError> {
     let lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
+    let id = apply_resolved_profile_unlocked(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        &plan,
+        asset_bytes.as_deref(),
+    )?;
+    drop(lock);
+    Ok(ApplyOutcome {
+        activation_id: id,
+        reload_outcome: reload.reload(),
+    })
+}
+
+/// Commits a freshly resolved Profile while the caller retains the exclusive state lock.
+/// Active deletion keeps this lock through Intent removal (RFC 0003); reload is always later.
+/// `plan` and staged bytes must come from this invocation's internal resolver, never user JSON.
+pub(crate) fn apply_resolved_profile_unlocked(
+    managed_root: &Path,
+    effective_root_config: &Path,
+    activated_at: &str,
+    plan: &Value,
+    asset_bytes: Option<&[u8]>,
+) -> Result<ActivationId, ApplyError> {
+    validate_timestamp(activated_at)?;
     inspect_integration_hook(effective_root_config, &managed_root.join("current.ghostty"))?;
     let history = inspect_history_unlocked(managed_root)?;
     let next = next_sequence(history.latest().map(|activation| activation.sequence()))?;
@@ -240,7 +265,7 @@ fn apply_resolved_profile<R: ReloadAdapter>(
         ensure_asset(
             managed_root,
             asset,
-            asset_bytes.as_deref().ok_or(ApplyError::InvalidPlan)?,
+            asset_bytes.ok_or(ApplyError::InvalidPlan)?,
         )?;
     } else if asset_bytes.is_some() {
         return Err(ApplyError::InvalidPlan);
@@ -268,12 +293,7 @@ fn apply_resolved_profile<R: ReloadAdapter>(
         }
     }
     publish_activation(managed_root, id, &record)?;
-    drop(lock);
-
-    Ok(ApplyOutcome {
-        activation_id: id,
-        reload_outcome: reload.reload(),
-    })
+    Ok(id)
 }
 
 /// Resolve and durably apply one GitHub Profile through a named-theme adapter.

@@ -307,6 +307,41 @@ fn init_uses_last_existing_root_config_and_preserves_permissions() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn root_hook_edit_preserves_mode_under_restrictive_umask() {
+    use std::os::unix::{fs::PermissionsExt, process::CommandExt};
+    let paths = test_paths("root-mode-restrictive-umask");
+    let config = paths.ghostty_config();
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "font-size = 13\n").unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).unwrap();
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_ghostty-wall"));
+    command
+        .arg("init")
+        .env("HOME", &paths.home)
+        .env("XDG_CONFIG_HOME", paths.xdg_config_home.as_ref().unwrap());
+    // Only the child changes umask; changing it in this test process would
+    // race other tests creating files.
+    unsafe {
+        command.pre_exec(|| {
+            libc::umask(0o077);
+            Ok(())
+        });
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::metadata(config).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+}
+
 #[test]
 fn equivalent_hook_does_not_duplicate_and_duplicates_require_repair() {
     let paths = test_paths("equivalent-hook");

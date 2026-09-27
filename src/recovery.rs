@@ -108,6 +108,17 @@ pub fn inspect_recovery_state(
         },
     };
     inspect_integration_hook(effective_root_config, &projection_path)?;
+    // An interrupted preview is not a committed-consistent Projection, even
+    // if its last frame happens to be semantically equal to the Activation.
+    let projection = if crate::preview::interrupted_marker(managed_root, history.latest())? {
+        if history.latest().is_some() {
+            ProjectionState::OutOfSync
+        } else {
+            ProjectionState::Unexpected
+        }
+    } else {
+        projection
+    };
     Ok(RecoveryInspection { projection })
 }
 
@@ -124,14 +135,19 @@ pub fn reconcile_recovery_state(
 pub(crate) fn reconcile_recovery_state_unlocked(managed_root: &Path) -> Result<(), RecoveryError> {
     let history = inspect_history_unlocked(managed_root)?;
     let projection = managed_root.join("current.ghostty");
+    let interrupted = crate::preview::interrupted_marker(managed_root, history.latest())?;
     match history.latest() {
         Some(activation) => atomic_projection(
             managed_root,
             &projection,
             &render_projection(managed_root, activation.environment()),
-        ),
-        None => remove_projection(managed_root, &projection),
+        )?,
+        None => remove_projection(managed_root, &projection)?,
     }
+    if interrupted {
+        crate::preview::clear_interrupted_marker(managed_root)?;
+    }
+    Ok(())
 }
 
 fn io_error(path: &Path, source: io::Error) -> RecoveryError {
@@ -141,8 +157,53 @@ fn io_error(path: &Path, source: io::Error) -> RecoveryError {
     }
 }
 
+/// Scoped flock ownership, released even if a forked child still holds a copy.
+pub(crate) struct StateLock(pub(crate) File);
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // Closing alone can retain the lock until an unrelated child execs.
+            // Unlock the shared open file description before closing our fd.
+            let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn dropping_state_lock_releases_it_with_an_inherited_descriptor() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.lock");
+        File::create(&path).unwrap();
+        for shared in [false, true] {
+            let lock = if shared {
+                shared_state_lock(&path).unwrap()
+            } else {
+                exclusive_state_lock(&path).unwrap()
+            };
+            // dup and fork share the same open file description. CLOEXEC only
+            // closes a child's copy at exec, not during its pre-exec window.
+            let inherited = lock.0.try_clone().unwrap();
+            assert!(try_exclusive_state_lock(&path).unwrap().is_none());
+            drop(lock);
+            let next = try_exclusive_state_lock(&path).unwrap();
+            assert!(
+                next.is_some(),
+                "released lock retained by inherited fd (shared={shared})"
+            );
+            drop(inherited);
+        }
+    }
+}
+
 #[cfg(unix)]
-fn shared_state_lock(path: &Path) -> Result<File, RecoveryError> {
+fn shared_state_lock(path: &Path) -> Result<StateLock, RecoveryError> {
     use std::{os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
 
     let file = OpenOptions::new()
@@ -163,16 +224,38 @@ fn shared_state_lock(path: &Path) -> Result<File, RecoveryError> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) } != 0 {
         return Err(io_error(path, io::Error::last_os_error()));
     }
-    Ok(file)
+    Ok(StateLock(file))
 }
 
 #[cfg(not(unix))]
-fn shared_state_lock(_path: &Path) -> Result<File, RecoveryError> {
+fn shared_state_lock(_path: &Path) -> Result<StateLock, RecoveryError> {
     Err(RecoveryError::UnsupportedPlatform)
 }
 
 #[cfg(unix)]
-pub(crate) fn exclusive_state_lock(path: &Path) -> Result<File, RecoveryError> {
+pub(crate) fn exclusive_state_lock(path: &Path) -> Result<StateLock, RecoveryError> {
+    lock_exclusive(path, false)
+}
+
+#[cfg(unix)]
+pub(crate) fn try_exclusive_state_lock(path: &Path) -> Result<Option<StateLock>, RecoveryError> {
+    match lock_exclusive(path, true) {
+        Err(RecoveryError::Io { source, .. })
+            if source.raw_os_error() == Some(libc::EWOULDBLOCK) =>
+        {
+            Ok(None)
+        }
+        result => result.map(Some),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn try_exclusive_state_lock(_path: &Path) -> Result<Option<StateLock>, RecoveryError> {
+    Err(RecoveryError::UnsupportedPlatform)
+}
+
+#[cfg(unix)]
+fn lock_exclusive(path: &Path, nonblocking: bool) -> Result<StateLock, RecoveryError> {
     use std::{os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
 
     let file = OpenOptions::new()
@@ -191,14 +274,15 @@ pub(crate) fn exclusive_state_lock(path: &Path) -> Result<File, RecoveryError> {
             io::Error::other("state lock is not a regular file"),
         ));
     }
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+    let mode = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
+    if unsafe { libc::flock(file.as_raw_fd(), mode) } != 0 {
         return Err(io_error(path, io::Error::last_os_error()));
     }
-    Ok(file)
+    Ok(StateLock(file))
 }
 
 #[cfg(not(unix))]
-pub(crate) fn exclusive_state_lock(_path: &Path) -> Result<File, RecoveryError> {
+pub(crate) fn exclusive_state_lock(_path: &Path) -> Result<StateLock, RecoveryError> {
     Err(RecoveryError::UnsupportedPlatform)
 }
 
@@ -316,9 +400,32 @@ pub(crate) fn materialize_projection_unlocked(
     )
 }
 
+pub(crate) fn materialize_preview_projection_unlocked(
+    root: &Path,
+    manifest: &EnvironmentManifest,
+    image: &Path,
+) -> Result<(), RecoveryError> {
+    atomic_projection(
+        root,
+        &root.join("current.ghostty"),
+        &render_with_image(root, manifest, Some(image)),
+    )
+}
+
 pub(crate) fn render_projection(root: &Path, manifest: &EnvironmentManifest) -> Vec<u8> {
+    render_with_image(root, manifest, None)
+}
+
+fn render_with_image(root: &Path, manifest: &EnvironmentManifest, image: Option<&Path>) -> Vec<u8> {
+    let mut model = projection_model(root, manifest);
+    if let Some(image) = image {
+        model.insert(
+            "background-image".into(),
+            normalize_path(image).display().to_string(),
+        );
+    }
     let mut rendered = String::new();
-    for (key, value) in projection_model(root, manifest) {
+    for (key, value) in model {
         if let Some(index) = key.strip_prefix("palette:") {
             rendered.push_str(&format!("palette = {index}={value}\n"));
         } else {
@@ -503,6 +610,7 @@ fn atomic_projection(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), Recov
     use std::os::unix::fs::OpenOptionsExt;
 
     let temp = root.join(format!(".tmp-projection-{}", std::process::id()));
+    let mut temp_created = false;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -513,6 +621,7 @@ fn atomic_projection(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), Recov
         let mut file = options
             .open(&temp)
             .map_err(|error| io_error(&temp, error))?;
+        temp_created = true;
         file.write_all(bytes)
             .map_err(|error| io_error(&temp, error))?;
         file.sync_all().map_err(|error| io_error(&temp, error))?;
@@ -522,7 +631,7 @@ fn atomic_projection(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), Recov
             .and_then(|directory| directory.sync_all())
             .map_err(|error| io_error(root, error))
     })();
-    if result.is_err() {
+    if temp_created && result.is_err() {
         let _ = fs::remove_file(&temp);
     }
     result

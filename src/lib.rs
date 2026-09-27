@@ -21,6 +21,12 @@ pub mod lifecycle;
 mod palette;
 /// Read-only planning.
 pub mod plan;
+/// Exclusive provisional live Projection preview sessions.
+pub mod preview;
+/// In-memory visual Profile editing and internal preview.
+pub mod profile_editor;
+/// Shared Profile creation, save, apply, and guarded deletion workflows.
+pub mod profile_workflow;
 /// Read-only synchronized Recovery Inspection.
 pub mod recovery;
 /// Best-effort Ghostty runtime reload adapters.
@@ -31,5 +37,6 @@ pub mod selection;
 pub mod terminal_browser;
 /// Read-only named Ghostty theme resolution.
 pub mod theme;
+mod tui;
 /// Explicit release-owned executable updates.
 pub mod update;

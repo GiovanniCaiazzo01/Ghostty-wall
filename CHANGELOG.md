@@ -6,6 +6,37 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.1.0]
+
+### Added
+
+- Guided `create [PROFILE]`: generate a stable wallpaper or pick a decoded PNG/JPEG from localized Downloads/Pictures, save a complete Profile, then choose Use now or Not now.
+- Visual `edit [PROFILE]` with Wallpaper, Colors and Terminal controls, exact hex/numeric input, internal samples, draft cancellation and confirmed Save and use.
+- Full-screen Profile management with Create, Edit, Delete, Use, active markers, error details, compact layouts and an Actions menu; no command opens the TUI.
+- Confirmed `delete [PROFILE]` with protected Welcome fallback for active Profiles and conservative, proven-exclusive image cleanup.
+- Profile/Source management commands, read-only `preview`, `list` and `history`, duplication, safe rename and retained advanced field edits.
+- Version 2 Profile Intent for owned images, stable generation recipes and per-color automatic/customized overrides. Existing version 1 Profiles and historical palettes remain readable.
+- Library-only provisional preview sessions with state locking, crash recovery, temporary image cleanup and distinct restoration/reload outcomes.
+
+### Changed
+
+- Wallpaper-coordinated `kmeans-v3` colors retain readable automatic text/ANSI contrast; wallpaper replacement preserves customized slots.
+- Website guides cover current commands, visual workflows, safe deletion, updates and compatibility. Documentation version and minimum Rust version follow Cargo metadata.
+- Rust 1.88 or newer is required by current dependencies.
+
+### Fixed
+
+- Explicit state-lock release prevents inherited child descriptors from causing intermittent false `Busy` errors after an operation ends.
+- Visual editing preserves legacy inline/dotted colors, concurrent changes and uncertain-publication evidence.
+- Save rollback preserves original/shared images; deletion verifies confirmed file and directory identities before removal.
+- PTY signal tests normalize SIGINT only in disposable children, including background runners.
+
+### Compatibility and limitations
+
+- Back up the complete Managed Root before downgrading. Older readers may reject version 2 Intent or new generated-color History; restore a matching data backup with an older executable.
+- Editor/TUI samples are internal, not live Ghostty reload. Real-window draft/cancel restoration and window scope remain unverified; the live session API is not exposed by CLI/TUI.
+- Linux is the stable target; macOS remains experimental. Reload acceptance is not proof of visible change.
+
 ## [1.0.4]
 
 ### Added

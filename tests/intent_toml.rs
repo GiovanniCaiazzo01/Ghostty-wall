@@ -74,7 +74,7 @@ background_opacity = 0.92
 fn invalid_profile_forms_fail_clearly() {
     for toml in [
         "schema_version = 1\nunknown = true\n",
-        "schema_version = 2\n",
+        "schema_version = 3\n",
         "schema_version = 1\n[terminal]\nfont_size = 0.1234\n",
         "schema_version = 1\n[terminal]\nfont_size = 1e1\n",
         "schema_version = 1\n[terminal]\n",

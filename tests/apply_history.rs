@@ -81,6 +81,56 @@ impl Drop for Root {
 }
 
 #[test]
+fn new_generated_provenance_preserves_readability_of_old_history() {
+    let root = Root::new();
+    fs::write(
+        root.base.join("fixture.png"),
+        include_bytes!("fixtures/white.png"),
+    )
+    .unwrap();
+    let config = parse_config_toml(&format!(
+        "schema_version = 1\n[sources.local]\nkind = \"local-directory\"\npath = {:?}\n",
+        root.base
+    ))
+    .unwrap();
+    let profile = parse_profile_toml("schema_version = 1\n[wallpaper]\nmode = \"source\"\nsource = \"local\"\nselection = \"path\"\npath = \"fixture.png\"\n[colors]\nmode = \"generated\"\n").unwrap();
+    apply_local_profile(
+        &root.base,
+        &root.base,
+        &root.managed,
+        &root.root_config,
+        &IntentId::from_str("colors").unwrap(),
+        &config,
+        &profile,
+        None,
+        "2026-09-23T08:31:15.123456Z",
+        UnavailableReload::new(ReloadUnavailableReason::GhosttyIntegrationUnavailable),
+    )
+    .unwrap();
+    let record = root
+        .managed
+        .join("history/activations/act-v1-0000000000000001.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    assert_eq!(value["color_resolution"]["algorithm"], "kmeans-v3");
+    assert!(inspect_history(&root.managed).is_ok());
+    value["color_resolution"]["algorithm"] = "kmeans-v2".into();
+    fs::write(&record, value.to_string()).unwrap();
+    assert!(
+        inspect_history(&root.managed).is_ok(),
+        "existing v2 History stays readable"
+    );
+    value["color_resolution"]["algorithm"] = "kmeans-v1".into();
+    fs::write(&record, value.to_string()).unwrap();
+    assert!(
+        inspect_history(&root.managed).is_ok(),
+        "existing v1 History stays readable"
+    );
+    value["color_resolution"]["algorithm"] = "unknown".into();
+    fs::write(record, value.to_string()).unwrap();
+    assert!(inspect_history(&root.managed).is_err());
+}
+
+#[test]
 fn apply_commits_each_profile_event_before_best_effort_reload() {
     let root = Root::new();
     root.apply_profile("one", "schema_version = 1\n", "2026-09-23T08:31:15.123456Z");

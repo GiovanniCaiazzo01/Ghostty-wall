@@ -19,13 +19,14 @@ fn generated_palette_is_deterministic_complete_and_readable() {
     let colors = &first["environment"]["manifest"]["colors"];
 
     assert_eq!(colors, &second["environment"]["manifest"]["colors"]);
-    assert_eq!(colors["background"], "1a212c");
-    assert_eq!(colors["foreground"], "ffffff");
-    assert_eq!(colors["palette"][1], "c12a2f");
-    assert_eq!(colors["palette"][8], "666b72");
+    assert_eq!(colors["background"], "090b0f");
+    assert!(luminance(colors["background"].as_str().unwrap()) < luminance("1a212c"));
+    assert_eq!(colors["foreground"], "eecd6c");
+    assert_eq!(colors["palette"][1], "cc4f53");
+    assert_eq!(colors["palette"][8], "807962");
     assert_eq!(colors["palette"][14], "219ac7");
     assert_eq!(first["color_resolution"]["kind"], "generated");
-    assert_eq!(first["color_resolution"]["algorithm"], "kmeans-v1");
+    assert_eq!(first["color_resolution"]["algorithm"], "kmeans-v3");
     let palette = colors["palette"].as_array().unwrap();
     assert_eq!(palette.len(), 16);
     assert!(
@@ -48,6 +49,30 @@ fn generated_palette_is_deterministic_complete_and_readable() {
 }
 
 #[test]
+fn colorful_wallpaper_tints_all_text_colors_without_losing_contrast() {
+    let fixture = fixture("palette.png", include_bytes!("fixtures/palette.png"));
+    let plan = generated_plan(&fixture).unwrap();
+    let colors = &plan["environment"]["manifest"]["colors"];
+    let background = colors["background"].as_str().unwrap();
+    let foreground = colors["foreground"].as_str().unwrap();
+    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_ne!(foreground, "ffffff");
+    assert_ne!(foreground, "000000");
+    for color in colors["palette"].as_array().unwrap() {
+        let text = color.as_str().unwrap();
+        let left = luminance(background);
+        let right = luminance(text);
+        assert!(
+            (left.max(right) + 0.05) / (left.min(right) + 0.05) >= 4.5,
+            "ANSI #{text} on #{background}"
+        );
+    }
+    assert!(contrast(colors, "background", "foreground") >= 4.5);
+    assert!(contrast(colors, "background", "cursor") >= 4.5);
+    assert!(contrast(colors, "selection_background", "selection_foreground") >= 4.5);
+}
+
+#[test]
 fn generated_palette_keeps_monochrome_wallpaper_useful() {
     let fixture = fixture("white.png", include_bytes!("fixtures/white.png"));
     let plan = generated_plan(&fixture).unwrap();
@@ -58,9 +83,17 @@ fn generated_palette_keeps_monochrome_wallpaper_useful() {
         .iter()
         .collect::<std::collections::HashSet<_>>();
 
-    assert_eq!(colors["background"], "ffffff");
-    assert_eq!(colors["foreground"], "000000");
+    assert_eq!(colors["background"], "555555");
+    assert_eq!(colors["foreground"], "ffffff");
     assert!(distinct.len() >= 12);
+    for entry in colors["palette"].as_array().unwrap() {
+        let text_luminance = luminance(entry.as_str().unwrap());
+        let background = luminance(colors["background"].as_str().unwrap());
+        assert!(
+            (background.max(text_luminance) + 0.05) / (background.min(text_luminance) + 0.05)
+                >= 4.5
+        );
+    }
 }
 
 #[test]

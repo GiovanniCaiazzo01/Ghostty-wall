@@ -66,7 +66,7 @@ fn navigation_preview_and_apply_use_application_service() {
     assert_eq!(preview.colors().unwrap().contrast_ratio(), 21.0);
     assert_eq!(
         browser.render(),
-        "Profile: night\nSource: landscapes\nWallpaper: coast.png\nEnvironment: env-v1-test\nColors: #000000 on #ffffff\nContrast: 21.00:1\n[a] apply  [esc] back  [q] cancel\n"
+        "Profile: night\nWallpaper: coast.png\nSource: landscapes\nbackground: #000000\nforeground: #ffffff\nTerminal: unmanaged\nEnvironment: env-v1-test\nContrast: 21.00:1\n[a] apply  [e/c/t/w] tweak  [b] back  [?] help  [q] quit\n"
     );
     assert_eq!(app.planned, ["night"]);
     assert!(app.applied.is_empty());

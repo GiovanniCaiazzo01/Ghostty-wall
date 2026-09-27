@@ -52,6 +52,7 @@ pub struct Activation {
     cursor: u64,
     environment_id: EnvironmentId,
     environment: crate::domain::EnvironmentManifest,
+    profile_id: Option<IntentId>,
 }
 impl Activation {
     /// Sequence determines event order, not timestamp.
@@ -70,12 +71,21 @@ impl Activation {
     pub fn environment(&self) -> &crate::domain::EnvironmentManifest {
         &self.environment
     }
+    /// Profile provenance of this event, if it was a Profile apply (not a replay).
+    pub fn profile_id(&self) -> Option<&IntentId> {
+        self.profile_id.as_ref()
+    }
 }
 /// Every final record in ascending sequence order, validated against persisted
 /// dependencies. Historical Profile/Source observations cannot be re-derived.
 #[derive(Debug)]
 pub struct History(Vec<Activation>);
 impl History {
+    /// Validated Activations in ascending sequence order.
+    pub fn activations(&self) -> &[Activation] {
+        &self.0
+    }
+
     /// Latest durable Activation, if any.
     pub fn latest(&self) -> Option<&Activation> {
         self.0.last()
@@ -228,6 +238,7 @@ pub fn inspect_history(root: &Path) -> Result<History, HistoryError> {
             return Err(io_error(&lock, io::Error::last_os_error()));
         }
     }
+    let _lock = crate::recovery::StateLock(_lock);
     inspect_history_unlocked(root)
 }
 
@@ -293,10 +304,10 @@ pub(crate) fn inspect_history_unlocked(root: &Path) -> Result<History, HistoryEr
         let environment = validate_environment(root, env_id)?;
         let all = record.source.is_some() && record.selection.is_some() && record.asset.is_some();
         let none = record.source.is_none() && record.selection.is_none() && record.asset.is_none();
-        match &record.cause {
+        let profile_id = match &record.cause {
             Cause::Profile {} => {
                 let profile = record.profile.as_ref().ok_or_else(|| corrupt(&path))?;
-                if profile.schema_version != 1
+                if !matches!(profile.schema_version, 1 | 2)
                     || profile.id.parse::<IntentId>().is_err()
                     || record.history_cursor != expected
                     || !(all || none)
@@ -336,6 +347,7 @@ pub(crate) fn inspect_history_unlocked(root: &Path) -> Result<History, HistoryEr
                 if !validate_color(record.color_resolution.as_ref(), all, &environment) {
                     return Err(corrupt(&path));
                 }
+                Some(profile.id.parse::<IntentId>().map_err(|_| corrupt(&path))?)
             }
             Cause::HistoryReplay { activation_id } => {
                 let target_id = activation_id
@@ -355,13 +367,15 @@ pub(crate) fn inspect_history_unlocked(root: &Path) -> Result<History, HistoryEr
                 {
                     return Err(corrupt(&path));
                 }
+                None
             }
-        }
+        };
         history.push(Activation {
             id,
             cursor: record.history_cursor,
             environment_id: env_id,
             environment,
+            profile_id,
         });
     }
     Ok(History(history))
@@ -596,7 +610,7 @@ fn validate_color(
             Sha256Digest::from_bytes(hash.finalize().into()).to_string() == *content_sha256
         }
         Some(ColorResolution::Generated { algorithm }) => {
-            algorithm == "kmeans-v1"
+            matches!(algorithm.as_str(), "kmeans-v1" | "kmeans-v2" | "kmeans-v3")
                 && has_asset
                 && matches!(environment.wallpaper(), Some(WallpaperManifest::Image(_)))
         }

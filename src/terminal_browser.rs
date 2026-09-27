@@ -212,6 +212,7 @@ pub struct ProfilePreview {
     environment_id: String,
     colors: Option<PreviewColors>,
     image: Option<Vec<u8>>,
+    details: String,
 }
 
 impl ProfilePreview {
@@ -247,6 +248,7 @@ impl ProfilePreview {
             candidate,
             environment_id,
             colors,
+            details: format_plan_preview(&planned.plan),
             image: planned.image,
         })
     }
@@ -312,6 +314,16 @@ impl TerminalBrowser {
         }
     }
 
+    /// Sources displayed in the browser.
+    pub fn sources(&self) -> &[IntentId] {
+        &self.sources
+    }
+
+    /// Profiles displayed in the browser.
+    pub fn profiles(&self) -> &[IntentId] {
+        &self.profiles
+    }
+
     /// Current focused pane.
     pub const fn focus(&self) -> BrowserFocus {
         self.focus
@@ -356,40 +368,19 @@ impl TerminalBrowser {
                     self.profile_index,
                     self.focus == BrowserFocus::Profiles,
                 );
-                output.push_str("[tab] pane  [j/k] navigate  [enter] preview  [q] cancel\n");
+                output.push_str("[n] new image  [m] new from Source  [o] add Source  [e/c/t/w] edit  [r/d/x] rename/duplicate/delete  [h] History  [s] Settings\n[tab] pane  [j/k] navigate  [enter] use Source / preview Profile  [?] help  [q] quit\n");
             }
             BrowserMode::Preview => {
                 let preview = self
                     .preview
                     .as_ref()
                     .expect("Preview mode always owns a preview");
-                writeln!(output, "Profile: {}", preview.profile_id()).unwrap();
-                writeln!(
-                    output,
-                    "Source: {}",
-                    preview.source_id().map_or("unmanaged", IntentId::as_str)
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "Wallpaper: {}",
-                    preview.candidate().unwrap_or("unmanaged")
-                )
-                .unwrap();
+                output.push_str(&preview.details);
                 writeln!(output, "Environment: {}", preview.environment_id()).unwrap();
                 if let Some(colors) = preview.colors() {
-                    writeln!(
-                        output,
-                        "Colors: #{} on #{}",
-                        colors.background(),
-                        colors.foreground()
-                    )
-                    .unwrap();
                     writeln!(output, "Contrast: {:.2}:1", colors.contrast_ratio()).unwrap();
-                } else {
-                    output.push_str("Colors: unmanaged\n");
                 }
-                output.push_str("[a] apply  [esc] back  [q] cancel\n");
+                output.push_str("[a] apply  [e/c/t/w] tweak  [b] back  [?] help  [q] quit\n");
             }
             BrowserMode::Applied => output.push_str("Profile applied.\n"),
             BrowserMode::Cancelled => output.push_str("Cancelled.\n"),
@@ -488,6 +479,100 @@ impl TerminalBrowser {
             (*index + len - 1) % len
         };
     }
+}
+
+/// Human-readable projection of managed values in a resolved Plan; no mutation.
+pub fn format_plan_preview(plan: &Value) -> String {
+    let mut output = String::new();
+    let manifest = &plan["environment"]["manifest"];
+    writeln!(
+        output,
+        "Profile: {}",
+        plan["profile"]["id"].as_str().unwrap_or("?")
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "Wallpaper: {}",
+        plan.pointer("/selection/candidate")
+            .and_then(Value::as_str)
+            .unwrap_or("unmanaged or disabled")
+    )
+    .unwrap();
+    if let Some(source) = plan.pointer("/source/id").and_then(Value::as_str) {
+        writeln!(output, "Source: {source}").unwrap();
+    }
+    if let Some(colors) = manifest.get("colors") {
+        for field in [
+            "background",
+            "foreground",
+            "cursor",
+            "selection_background",
+            "selection_foreground",
+        ] {
+            if let Some(value) = colors[field].as_str() {
+                writeln!(output, "{field}: #{value}").unwrap();
+            }
+        }
+        if let Some(palette) = colors["palette"].as_array() {
+            for (index, color) in palette.iter().enumerate() {
+                writeln!(output, "ANSI {index}: #{}", color.as_str().unwrap_or("?")).unwrap();
+            }
+        }
+    } else {
+        output.push_str("Colors: unmanaged\n");
+    }
+    if let Some(wallpaper) = manifest["wallpaper"].as_object() {
+        for field in ["fit", "position", "repeat", "opacity_millionths"] {
+            if let Some(value) = wallpaper.get(field) {
+                if field == "opacity_millionths" {
+                    writeln!(
+                        output,
+                        "Wallpaper opacity: {:.6}",
+                        value.as_u64().unwrap_or(0) as f64 / 1_000_000.0
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        output,
+                        "Wallpaper {field}: {}",
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| value.to_string())
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+    if let Some(terminal) = manifest["terminal"].as_object() {
+        for (field, value) in terminal {
+            match (field.as_str(), value.as_u64()) {
+                ("font_size_millipoints", Some(size)) => {
+                    writeln!(output, "Terminal font size: {:.3}", size as f64 / 1_000.0).unwrap()
+                }
+                ("background_opacity_millionths", Some(opacity)) => writeln!(
+                    output,
+                    "Terminal background opacity: {:.6}",
+                    opacity as f64 / 1_000_000.0
+                )
+                .unwrap(),
+                _ => writeln!(
+                    output,
+                    "Terminal {field}: {}",
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                )
+                .unwrap(),
+            }
+        }
+    } else {
+        output.push_str("Terminal: unmanaged\n");
+    }
+    output
 }
 
 fn render_items(output: &mut String, items: &[IntentId], selected: usize, focused: bool) {

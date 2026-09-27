@@ -117,6 +117,11 @@ pub enum PlanError {
     /// Selected asset was not PNG or JPEG.
     #[error("selected asset is not PNG or JPEG")]
     UnsupportedImage,
+    /// A Profile's ownership claim disagrees with its copied image bytes.
+    #[error(
+        "owned image digest does not match at {0}; no files changed; restore the copied image or correct the Profile"
+    )]
+    OwnedImageMismatch(PathBuf),
     /// Selection algorithm failed.
     #[error(transparent)]
     Selection(#[from] RandomSelectionError),
@@ -175,6 +180,9 @@ impl PlanError {
             }),
             Self::UnsupportedImage => json!({
                 "category": "resolution", "code": "asset.unsupported-image"
+            }),
+            Self::OwnedImageMismatch(path) => json!({
+                "category": "intent", "code": "intent.owned-image-mismatch", "path": path.display().to_string()
             }),
             Self::Corrupt(path) => json!({
                 "category": "corruption",
@@ -473,6 +481,7 @@ fn plan_profile_json_inner(
             position,
             opacity,
             repeat,
+            owned_image,
         }) => {
             let source_intent = config
                 .sources
@@ -504,6 +513,26 @@ fn plan_profile_json_inner(
                     github.ok_or(PlanError::Unsupported("GitHub adapter unavailable"))?,
                 )?,
             };
+            if let Some(owned) = owned_image {
+                if !matches!(source_intent, SourceIntent::LocalDirectory { path } if path == "profiles")
+                {
+                    return Err(PlanError::Unsupported(
+                        "owned image requires local profiles Source",
+                    ));
+                }
+                if sha256(&resolved.bytes) != owned.sha256 {
+                    return Err(PlanError::OwnedImageMismatch(
+                        managed_root.join("profiles").join(match selection {
+                            WallpaperSelection::Path(path) => path.as_str(),
+                            WallpaperSelection::Random => {
+                                return Err(PlanError::Unsupported(
+                                    "owned image requires path selection",
+                                ));
+                            }
+                        }),
+                    ));
+                }
+            }
             let media_type = detect_media_type(&resolved.bytes)?;
             let asset_sha256 = sha256(&resolved.bytes);
             let mut image = ImageWallpaper::new(asset_sha256, media_type);
@@ -564,17 +593,21 @@ fn plan_profile_json_inner(
             ),
             Some(theme.as_str()),
         ),
-        Some(ColorsIntent::Generated) => (
-            Some(
-                crate::palette::generate_kmeans_v1(
-                    selected_asset_bytes
-                        .as_deref()
-                        .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
-                )
-                .map_err(|_| PlanError::UnsupportedImage)?,
-            ),
-            None,
-        ),
+        Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
+            let generated = crate::palette::generate_kmeans_v3(
+                selected_asset_bytes
+                    .as_deref()
+                    .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
+            )
+            .map_err(|_| PlanError::UnsupportedImage)?;
+            let resolved = match &profile.colors {
+                Some(ColorsIntent::GeneratedWithOverrides(overrides)) => {
+                    apply_color_overrides(generated, overrides)
+                }
+                _ => generated,
+            };
+            (Some(resolved), None)
+        }
         None => (None, None),
     };
     let terminal = profile
@@ -625,7 +658,7 @@ fn plan_profile_json_inner(
     });
     let mut plan = json!({
         "schema_version": 1,
-        "profile": { "id": profile_id.as_str(), "schema_version": 1 },
+        "profile": { "id": profile_id.as_str(), "schema_version": profile.schema_version },
         "environment": { "environment_id": environment_id.to_string(), "manifest": manifest_json },
         "operations": operations,
         "diagnostics": diagnostics,
@@ -634,8 +667,9 @@ fn plan_profile_json_inner(
     insert_optional(&mut plan, "selection", selection_json);
     insert_optional(&mut plan, "asset", asset_json);
     let color_resolution = match &profile.colors {
-        Some(ColorsIntent::Generated) => {
-            Some(json!({ "kind": "generated", "algorithm": "kmeans-v1" }))
+        Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
+            // RFC 0005: preserve historical algorithm provenance across palette changes.
+            Some(json!({ "kind": "generated", "algorithm": "kmeans-v3" }))
         }
         Some(ColorsIntent::Theme { .. }) => {
             let theme = theme_name.ok_or(PlanError::Unsupported("missing theme provenance"))?;
@@ -650,6 +684,34 @@ fn plan_profile_json_inner(
     };
     insert_optional(&mut plan, "color_resolution", color_resolution);
     Ok(plan)
+}
+
+pub(crate) fn apply_color_overrides(
+    base: ColorsManifest,
+    overrides: &crate::domain::ColorOverrides,
+) -> ColorsManifest {
+    let [
+        background,
+        foreground,
+        cursor,
+        selection_background,
+        selection_foreground,
+    ] = overrides.scalars;
+    let mut colors = ColorsManifest::new(
+        background.unwrap_or(base.background()),
+        foreground.unwrap_or(base.foreground()),
+        std::array::from_fn(|index| overrides.palette[index].unwrap_or(base.palette()[index])),
+    );
+    if let Some(color) = cursor.or(base.cursor()) {
+        colors = colors.with_cursor(color);
+    }
+    if let Some(color) = selection_background.or(base.selection_background()) {
+        colors = colors.with_selection_background(color);
+    }
+    if let Some(color) = selection_foreground.or(base.selection_foreground()) {
+        colors = colors.with_selection_foreground(color);
+    }
+    colors
 }
 
 fn theme_content_digest(colors: &Value) -> Result<Sha256Digest, PlanError> {

@@ -416,7 +416,7 @@ impl Created {
 }
 
 #[cfg(unix)]
-fn lock_state(path: &Path) -> Result<fs::File, InitError> {
+fn lock_state(path: &Path) -> Result<crate::recovery::StateLock, InitError> {
     use std::{os::fd::AsRawFd, os::unix::fs::OpenOptionsExt};
     let file = fs::OpenOptions::new()
         .read(true)
@@ -434,11 +434,11 @@ fn lock_state(path: &Path) -> Result<fs::File, InitError> {
             source: io::Error::last_os_error(),
         });
     }
-    Ok(file)
+    Ok(crate::recovery::StateLock(file))
 }
 
 #[cfg(not(unix))]
-fn lock_state(_path: &Path) -> Result<fs::File, InitError> {
+fn lock_state(_path: &Path) -> Result<crate::recovery::StateLock, InitError> {
     Err(InitError::UnsupportedPlatform)
 }
 
@@ -1537,7 +1537,7 @@ fn atomic_edit_with_hooks(
     before_commit: impl FnOnce(),
     sync_parent: impl FnOnce(&Path) -> io::Result<()>,
 ) -> Result<(), InitError> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let original = fs::metadata(target).map_err(|source| InitError::Io {
@@ -1567,13 +1567,20 @@ fn atomic_edit_with_hooks(
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(original.mode() & 0o777)
+            .mode(0o600)
             .open(&temp)
             .map_err(|source| InitError::Io {
                 path: temp.clone(),
                 source,
             })?;
         temp_created = true;
+        // Root configs are user-owned: preserve their safe mode even when the
+        // process umask is stricter than the original file's permissions.
+        file.set_permissions(fs::Permissions::from_mode(original.mode() & 0o777))
+            .map_err(|source| InitError::Io {
+                path: temp.clone(),
+                source,
+            })?;
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|source| InitError::Io {

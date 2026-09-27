@@ -102,6 +102,8 @@ impl FromStr for SourcePath {
 /// Complete Profile recipe from `profiles/<profile-id>.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileIntent {
+    /// Authored Profile schema version.
+    pub schema_version: u8,
     /// Optional wallpaper intent.
     pub wallpaper: Option<WallpaperIntent>,
     /// Optional colors intent.
@@ -129,7 +131,29 @@ pub enum WallpaperIntent {
         opacity: Option<OpacityMillionths>,
         /// Optional repeat flag.
         repeat: Option<bool>,
+        /// Version 2 owned image digest and optional generation recipe.
+        owned_image: Option<OwnedImage>,
     },
+}
+
+/// Version 2 managed image claim; image bytes remain the authoritative candidate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedImage {
+    /// Hash of the copied image bytes.
+    pub sha256: super::Sha256Digest,
+    /// One-time generator recipe, if generated rather than imported.
+    pub generation: Option<GenerationRecipe>,
+}
+
+/// Versioned deterministic generator recipe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenerationRecipe {
+    /// 32-byte seed.
+    pub seed: super::Sha256Digest,
+    /// Image width.
+    pub width: u32,
+    /// Image height.
+    pub height: u32,
 }
 
 /// Wallpaper Candidate selection.
@@ -146,6 +170,8 @@ pub enum WallpaperSelection {
 pub enum ColorsIntent {
     /// Generate palette from wallpaper.
     Generated,
+    /// Generate a palette, replacing only customized slots.
+    GeneratedWithOverrides(ColorOverrides),
     /// Load named Ghostty theme.
     Theme {
         /// Theme name.
@@ -166,6 +192,15 @@ pub enum ColorsIntent {
         /// Optional selection foreground.
         selection_foreground: Option<Color>,
     },
+}
+
+/// Optional per-slot customized colors; absent slots are automatic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorOverrides {
+    /// Scalar slots in background, foreground, cursor, selection background, selection foreground order.
+    pub scalars: [Option<Color>; 5],
+    /// ANSI palette overrides.
+    pub palette: [Option<Color>; 16],
 }
 
 /// Terminal intent with at least one managed field.

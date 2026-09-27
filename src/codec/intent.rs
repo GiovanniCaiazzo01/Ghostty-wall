@@ -6,19 +6,22 @@ use thiserror::Error;
 use toml::Value;
 
 use crate::domain::{
-    BackgroundBlurIntensity, CandidatePath, Color, ColorsIntent, ConfigIntent, FontSizeMillipoints,
-    IntentId, OpacityMillionths, ProfileIntent, SourceIntent, SourcePath, TerminalIntent,
-    ValidationError, WallpaperIntent, WallpaperSelection,
+    BackgroundBlurIntensity, CandidatePath, Color, ColorOverrides, ColorsIntent, ConfigIntent,
+    FontSizeMillipoints, GenerationRecipe, IntentId, OpacityMillionths, OwnedImage, ProfileIntent,
+    Sha256Digest, SourceIntent, SourcePath, TerminalIntent, ValidationError, WallpaperIntent,
+    WallpaperSelection,
 };
 
-/// Failure while loading v1 intent TOML.
+/// Failure while loading versioned Intent TOML.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum IntentTomlError {
     /// TOML syntax or duplicate key error.
     #[error("invalid TOML: {0}")]
     Toml(String),
     /// Schema version missing or unsupported.
-    #[error("schema_version must equal 1")]
+    #[error(
+        "unsupported schema_version (config requires 1; Profiles support 1 or 2); no files changed"
+    )]
     SchemaVersion,
     /// Required field missing.
     #[error("missing required field {0}")]
@@ -107,6 +110,20 @@ pub fn parse_named_profile_toml(
     {
         return Err(IntentTomlError::Unknown(format!("sources.{source}")));
     }
+    if let Some(WallpaperIntent::Source {
+        source,
+        owned_image: Some(_),
+        ..
+    }) = &profile.wallpaper
+        && !config.sources.iter().any(|(id, intent)| {
+            id == source
+                && matches!(intent, SourceIntent::LocalDirectory { path } if path == "profiles")
+        })
+    {
+        return Err(IntentTomlError::Invariant(
+            "owned image requires local profiles Source",
+        ));
+    }
     Ok((id, profile))
 }
 
@@ -118,14 +135,23 @@ pub fn parse_profile_toml(input: &str) -> Result<ProfileIntent, IntentTomlError>
         .map_err(|error: toml_edit::TomlError| IntentTomlError::Toml(error.to_string()))?;
     let root = value.as_table().ok_or(IntentTomlError::Type("document"))?;
     allow(root, &["schema_version", "wallpaper", "colors", "terminal"])?;
-    require_schema(root)?;
+    let schema_version = match root.get("schema_version").and_then(Value::as_integer) {
+        Some(1) => 1,
+        Some(2) => 2,
+        _ => return Err(IntentTomlError::SchemaVersion),
+    };
     let wallpaper = root
         .get("wallpaper")
-        .map(|value| parse_wallpaper(value, &lexical))
+        .map(|value| parse_wallpaper(value, &lexical, schema_version))
         .transpose()?;
-    let colors = root.get("colors").map(parse_colors).transpose()?;
-    if matches!(colors, Some(ColorsIntent::Generated))
-        && !matches!(wallpaper, Some(WallpaperIntent::Source { .. }))
+    let colors = root
+        .get("colors")
+        .map(|value| parse_colors(value, schema_version))
+        .transpose()?;
+    if matches!(
+        colors,
+        Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_))
+    ) && !matches!(wallpaper, Some(WallpaperIntent::Source { .. }))
     {
         return Err(IntentTomlError::Invariant(
             "generated colors require source wallpaper",
@@ -136,6 +162,7 @@ pub fn parse_profile_toml(input: &str) -> Result<ProfileIntent, IntentTomlError>
         .map(|value| parse_terminal(value, &lexical))
         .transpose()?;
     Ok(ProfileIntent {
+        schema_version,
         wallpaper,
         colors,
         terminal,
@@ -145,6 +172,7 @@ pub fn parse_profile_toml(input: &str) -> Result<ProfileIntent, IntentTomlError>
 fn parse_wallpaper(
     value: &Value,
     lexical: &toml_edit::DocumentMut,
+    schema_version: u8,
 ) -> Result<WallpaperIntent, IntentTomlError> {
     let table = value.as_table().ok_or(IntentTomlError::Type("wallpaper"))?;
     match string(table, "mode")? {
@@ -164,8 +192,65 @@ fn parse_wallpaper(
                     "position",
                     "opacity",
                     "repeat",
+                    "owned_sha256",
+                    "generation",
                 ],
             )?;
+            if schema_version == 1
+                && (table.contains_key("owned_sha256") || table.contains_key("generation"))
+            {
+                return Err(IntentTomlError::Invariant(
+                    "owned images require Profile schema 2",
+                ));
+            }
+            let owned_image = opt_string(table, "owned_sha256")?
+                .map(|digest| {
+                    let sha256 = digest.parse::<Sha256Digest>()?;
+                    let generation = table
+                        .get("generation")
+                        .map(|value| -> Result<GenerationRecipe, IntentTomlError> {
+                            let recipe = value
+                                .as_table()
+                                .ok_or(IntentTomlError::Type("generation"))?;
+                            allow(recipe, &["algorithm", "seed", "width", "height"])?;
+                            if string(recipe, "algorithm")? != "gradient-v1" {
+                                return Err(IntentTomlError::Mode {
+                                    field: "generation.algorithm",
+                                    value: string(recipe, "algorithm")?.to_owned(),
+                                });
+                            }
+                            let width = opt_integer(recipe, "width")?
+                                .ok_or(IntentTomlError::Missing("generation.width"))?;
+                            let height = opt_integer(recipe, "height")?
+                                .ok_or(IntentTomlError::Missing("generation.height"))?;
+                            if !(64..=1024).contains(&width) || !(64..=1024).contains(&height) {
+                                return Err(IntentTomlError::Invariant(
+                                    "generation dimensions must be 64..=1024",
+                                ));
+                            }
+                            Ok(GenerationRecipe {
+                                seed: string(recipe, "seed")?.parse()?,
+                                width: width as u32,
+                                height: height as u32,
+                            })
+                        })
+                        .transpose()?;
+                    Ok::<OwnedImage, IntentTomlError>(OwnedImage { sha256, generation })
+                })
+                .transpose()?;
+            if table.contains_key("generation") && owned_image.is_none() {
+                return Err(IntentTomlError::Invariant(
+                    "generation requires owned_sha256",
+                ));
+            }
+            if owned_image.is_some()
+                && (!matches!(table.get("selection").and_then(Value::as_str), Some("path"))
+                    || string(table, "path")?.contains('/'))
+            {
+                return Err(IntentTomlError::Invariant(
+                    "owned image requires a basename path selection",
+                ));
+            }
             let source = IntentId::from_str(string(table, "source")?)?;
             let selection = match string(table, "selection")? {
                 "random" => {
@@ -195,6 +280,7 @@ fn parse_wallpaper(
                     .map(OpacityMillionths::new)
                     .transpose()?,
                 repeat: opt_bool(table, "repeat")?,
+                owned_image,
             })
         }
         other => Err(IntentTomlError::Mode {
@@ -204,12 +290,75 @@ fn parse_wallpaper(
     }
 }
 
-fn parse_colors(value: &Value) -> Result<ColorsIntent, IntentTomlError> {
+fn parse_colors(value: &Value, schema_version: u8) -> Result<ColorsIntent, IntentTomlError> {
     let table = value.as_table().ok_or(IntentTomlError::Type("colors"))?;
     match string(table, "mode")? {
         "generated" => {
-            allow(table, &["mode"])?;
-            Ok(ColorsIntent::Generated)
+            allow(table, &["mode", "overrides"])?;
+            if let Some(value) = table.get("overrides") {
+                if schema_version == 1 {
+                    return Err(IntentTomlError::Invariant(
+                        "color overrides require Profile schema 2",
+                    ));
+                }
+                let overrides = value
+                    .as_table()
+                    .ok_or(IntentTomlError::Type("colors.overrides"))?;
+                allow(
+                    overrides,
+                    &[
+                        "background",
+                        "foreground",
+                        "cursor",
+                        "selection_background",
+                        "selection_foreground",
+                        "palette",
+                    ],
+                )?;
+                if overrides.is_empty() {
+                    return Err(IntentTomlError::Invariant("empty color overrides"));
+                }
+                let mut scalars = [None; 5];
+                for (slot, key) in [
+                    "background",
+                    "foreground",
+                    "cursor",
+                    "selection_background",
+                    "selection_foreground",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    if let Some(value) = opt_string(overrides, key)? {
+                        scalars[slot] = parse_override(value)?;
+                    }
+                }
+                let mut palette = [None; 16];
+                if let Some(value) = overrides.get("palette") {
+                    let values = value
+                        .as_array()
+                        .ok_or(IntentTomlError::Type("colors.overrides.palette"))?;
+                    if values.len() != 16 {
+                        return Err(ValidationError::InvalidPaletteLength {
+                            found: values.len(),
+                        }
+                        .into());
+                    }
+                    for (slot, value) in values.iter().enumerate() {
+                        palette[slot] = parse_override(
+                            value
+                                .as_str()
+                                .ok_or(IntentTomlError::Type("colors.overrides.palette"))?,
+                        )?;
+                    }
+                }
+                Ok(ColorsIntent::GeneratedWithOverrides(ColorOverrides {
+                    scalars,
+                    palette,
+                }))
+            } else {
+                Ok(ColorsIntent::Generated)
+            }
         }
         "theme" => {
             allow(table, &["mode", "theme"])?;
@@ -266,6 +415,14 @@ fn parse_colors(value: &Value) -> Result<ColorsIntent, IntentTomlError> {
             field: "colors.mode",
             value: other.to_owned(),
         }),
+    }
+}
+
+fn parse_override(value: &str) -> Result<Option<Color>, IntentTomlError> {
+    if value == "auto" {
+        Ok(None)
+    } else {
+        Ok(Some(value.parse()?))
     }
 }
 

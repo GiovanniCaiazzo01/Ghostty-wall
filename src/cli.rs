@@ -3,13 +3,20 @@
 use std::{
     env, fs,
     fs::OpenOptions,
-    io::{self, BufRead, Read, Write},
+    io::{self, BufRead, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crossterm::{
+    event::{self, Event, KeyEventKind},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::{
     apply::{
@@ -31,25 +38,70 @@ use crate::{
     },
     runtime::{ReloadAdapter, platform_reload_adapter},
     terminal_browser::{
-        BrowserAction, BrowserApplication, BrowserMode, PlannedProfile, TerminalBrowser,
-        TerminalGraphics,
+        BrowserAction, BrowserApplication, BrowserFocus, BrowserMode, PlannedProfile,
+        TerminalBrowser, TerminalGraphics, format_plan_preview,
     },
     theme::ThemeFileResolver,
+    tui::{self, Input},
     update::{self, UpdateError},
 };
+
+mod create_tui;
+mod delete;
+mod editor;
+mod management;
 
 const HELP: &str = concat!(
     "Ghostty Wall ",
     env!("CARGO_PKG_VERSION"),
     "\n\nUsage:\n",
+    "  ghostty-wall                           # Profile management center\n",
     "  ghostty-wall init [--dry-run | --repair | --migrate-legacy | --welcome]\n",
     "  ghostty-wall plan PROFILE [--seed HEX] [--json]\n",
+    "  ghostty-wall preview PROFILE [--seed HEX]  # read-only; not live Ghostty reload\n",
+    "  ghostty-wall create [PROFILE]     # guided image or stable generated wallpaper\n",
+    "  ghostty-wall new PROFILE [IMAGE [--apply]]\n",
+    "  ghostty-wall new PROFILE --generate SEED_HEX  # stable gradient-v1 PNG\n",
+    "  ghostty-wall new PROFILE --source SOURCE --path CANDIDATE [--apply]\n",
+    "  ghostty-wall source add SOURCE local DIRECTORY\n",
+    "  ghostty-wall source add SOURCE github OWNER/REPO [--ref REF] [--path PATH]\n",
+    "  ghostty-wall edit [PROFILE]     # visual draft editor; Save and use confirms\n",
+    "  ghostty-wall edit PROFILE FIELD VALUE    # advanced; saves immediately; no live draft\n",
+    "  ghostty-wall duplicate PROFILE NEW\n",
+    "  ghostty-wall rename PROFILE NEW  # inactive, non-Welcome Profile only\n",
+    "  ghostty-wall delete [PROFILE]   # confirmed; active deletion falls back to Welcome\n",
+    "  ghostty-wall list\n",
+    "  ghostty-wall history\n",
     "  ghostty-wall apply PROFILE [--seed HEX]\n",
     "  ghostty-wall previous\n",
     "  ghostty-wall doctor\n",
-    "  ghostty-wall tui [--seed HEX]\n",
+    "  ghostty-wall tui [--seed HEX]       # Create/Edit/Delete/Use; ? Actions, --help\n",
     "  ghostty-wall uninstall\n",
-    "  ghostty-wall update [--check]\n"
+    "  ghostty-wall update [--check]\n",
+    "\nLive draft sessions are library-only; CLI/TUI previews do not reload Ghostty.\n",
+    "After an interrupted session, apply/previous restore from History before committing; doctor is read-only.\n"
+);
+const CREATE_HELP: &str = concat!(
+    "Usage: ghostty-wall create [PROFILE]\n\n",
+    "Create a complete Profile with a generated wallpaper or your own PNG/JPEG.\n",
+    "Omit PROFILE to choose an id; supplied ids are not asked for again.\n",
+    "Ids: 1..64 lowercase letters/digits with single internal hyphens. Existing ids are errors.\n\n",
+    "Answer each prompt then press Enter. Type cancel (or send EOF) before Save\n",
+    "to discard the draft without writing files. Generated wallpapers change only\n",
+    "when you choose Another variant before Save; plan/apply never regenerate them.\n\n",
+    "The image picker starts at system Downloads/Pictures locations. Use a number\n",
+    "or relative path, .. for parent, d/p to switch roots, /text to search, or\n",
+    "path:/absolute/path to open an absolute path. Images are decoded before import;\n",
+    "the original is untouched. Save copies the image into managed storage; an identical\n",
+    "existing image may be reused but never gains deletion ownership.\n\n",
+    "A failed Save before Profile publication rolls back only its new unchanged image;\n",
+    "existing files are preserved. Fix the reported error before retrying create.\n",
+    "Uncertain publication or incomplete rollback requires inspection before retry.\n\n",
+    "After Save choose Use now or Not now (default). Use now commits an Activation\n",
+    "via normal apply; reload is best-effort, not proof of visible Ghostty change.\n",
+    "Not now keeps the Profile saved and leaves the terminal unchanged.\n",
+    "Run ghostty-wall init first. This command does not provide live draft preview.\n",
+    "TUI: n opens the same workflow with an embedded form and approximate sample.\n"
 );
 const MAX_INTENT_BYTES: u64 = 1024 * 1024;
 
@@ -74,7 +126,7 @@ fn execute(
     input_errors: &mut impl Write,
 ) -> Result<(), CliError> {
     match args {
-        [] => Err(CliError::Usage("missing command".into())),
+        [] => command_tui(&[], output, input_errors),
         [flag] if flag == "--help" || flag == "-h" => write_text(output, HELP),
         [flag] if flag == "--version" || flag == "-V" => {
             writeln!(output, "ghostty-wall {}", env!("CARGO_PKG_VERSION"))?;
@@ -82,6 +134,18 @@ fn execute(
         }
         [command, rest @ ..] if command == "init" => command_init(rest, output),
         [command, rest @ ..] if command == "plan" => command_plan(rest, output),
+        [command, rest @ ..] if command == "preview" => command_preview(rest, output),
+        [command, rest @ ..] if command == "create" => command_create(rest, output),
+        [command, rest @ ..] if command == "new" => command_new(rest, output),
+        [command, rest @ ..] if command == "source" => command_source(rest, output),
+        [command, rest @ ..] if command == "edit" => command_edit(rest, output),
+        [command, rest @ ..] if command == "duplicate" => {
+            command_profile_file(rest, "duplicate", output)
+        }
+        [command, rest @ ..] if command == "rename" => command_profile_file(rest, "rename", output),
+        [command, rest @ ..] if command == "delete" => delete::command(rest, output),
+        [command] if command == "list" => command_list(output),
+        [command] if command == "history" => command_history(output),
         [command, rest @ ..] if command == "apply" => command_apply(rest, output),
         [command] if command == "previous" => command_previous(output),
         [command] if command == "doctor" => command_doctor(output),
@@ -153,6 +217,1156 @@ fn command_plan(args: &[String], output: &mut impl Write) -> Result<(), CliError
     }
 }
 
+fn command_preview(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    let options = ProfileOptions::parse(args, false)?;
+    let application = Application::load(options.seed)?;
+    let plan = application.plan(&options.profile)?;
+    write_text(output, &format_plan_preview(&plan))
+}
+
+/// Guided creation keeps all tentative image bytes and Intent in memory until explicit save.
+fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    let supplied = match args {
+        [] => None,
+        [flag] if flag == "--help" || flag == "-h" => return write_text(output, CREATE_HELP),
+        [name] => {
+            IntentId::from_str(name).map_err(|error| {
+                CliError::Input(format!(
+                    "Cannot create Profile {name:?}: {}; no files changed. Choose another id.",
+                    CliError::from(error)
+                ))
+            })?;
+            Some(name.as_str())
+        }
+        _ => {
+            return Err(CliError::Input(
+                "expected create [PROFILE]; see create --help".into(),
+            ));
+        }
+    };
+    let paths = process_paths()?;
+    let workflow = crate::profile_workflow::ProfileWorkflows::load(paths.clone()).map_err(|error| {
+        if matches!(&error, crate::profile_workflow::WorkflowError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound) {
+            CliError::Intent(format!("Cannot start creation: {error}; no files changed. Run ghostty-wall init for an uninitialized installation; otherwise inspect the missing path first."))
+        } else {
+            error.into()
+        }
+    })?;
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    let mut name = supplied.map(str::to_owned);
+    let mut draft = loop {
+        let candidate = match name.take() {
+            Some(value) => value,
+            None => match create_prompt(&mut lines, output, "Profile ID (or cancel): ")? {
+                Some(value) => value,
+                None => return create_cancelled(output),
+            },
+        };
+        match workflow.create(&candidate) {
+            Ok(draft) => break draft,
+            Err(
+                error @ (crate::profile_workflow::WorkflowError::Id(_)
+                | crate::profile_workflow::WorkflowError::Collision(_)),
+            ) if supplied.is_none() => {
+                writeln!(
+                    output,
+                    "Invalid or existing Profile ID: {}. Try another; nothing saved.",
+                    CliError::from(error)
+                )?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    writeln!(
+        output,
+        "Create Profile {}. Nothing is saved until you choose Save.",
+        draft.id()
+    )?;
+    let generated = loop {
+        let Some(choice) = create_prompt(
+            &mut lines,
+            output,
+            "Wallpaper: [g]enerate, [i]mage from Downloads/Pictures, or cancel: ",
+        )?
+        else {
+            return create_cancelled(output);
+        };
+        match choice.to_ascii_lowercase().as_str() {
+            "g" | "generate" => {
+                generate_create_image(&workflow, &mut draft, output)?;
+                break true;
+            }
+            "i" | "image" => {
+                if !pick_create_image(&workflow, &mut draft, &paths, &mut lines, output)? {
+                    return create_cancelled(output);
+                }
+                break false;
+            }
+            _ => writeln!(output, "Choose g or i; nothing saved.")?,
+        }
+    };
+    let mut colors = draft.generated_colors()?;
+    loop {
+        writeln!(
+            output,
+            "Draft {}: wallpaper and generated colors (background #{}, foreground #{}, 16 ANSI colors). This is not a live Ghostty reload.",
+            draft.id(),
+            colors.background(),
+            colors.foreground()
+        )?;
+        let label = if generated {
+            "[s]ave, [a]nother generated variant (before save only), or cancel: "
+        } else {
+            "[s]ave copied image and colors, or cancel: "
+        };
+        let Some(choice) = create_prompt(&mut lines, output, label)? else {
+            return create_cancelled(output);
+        };
+        match choice.to_ascii_lowercase().as_str() {
+            "s" | "save" => break,
+            "a" | "another" if generated => {
+                generate_create_image(&workflow, &mut draft, output)?;
+                colors = draft.generated_colors()?;
+            }
+            _ => writeln!(
+                output,
+                "Choose one of the listed actions; draft unchanged, nothing saved."
+            )?,
+        }
+    }
+    let id = workflow.save(draft)?;
+    writeln!(output, "Saved Profile {id}. No Activation yet.")?;
+    loop {
+        let Some(choice) =
+            create_prompt(&mut lines, output, "[y] Use now / [n] Not now (default): ")?
+        else {
+            writeln!(
+                output,
+                "Not now; saved Profile remains, terminal unchanged."
+            )?;
+            return Ok(());
+        };
+        match choice.to_ascii_lowercase().as_str() {
+            "" | "n" | "no" | "not now" => {
+                writeln!(output, "Saved Profile {id}; terminal unchanged.")?;
+                return Ok(());
+            }
+            "y" | "yes" | "use now" => {
+                // Loading and applying can fail independently of the already completed save.
+                let outcome = workflow.use_saved(&id, |id| Application::load(None)?.apply(id))?;
+                if let crate::profile_workflow::ProfileOutcome::SavedAndApplied {
+                    activation,
+                    reload,
+                } = outcome
+                {
+                    writeln!(output, "Activated {activation} for Profile {id}.")?;
+                    let status = match reload {
+                        crate::runtime::ReloadOutcome::Succeeded => {
+                            "action accepted; visible change is not verified"
+                        }
+                        crate::runtime::ReloadOutcome::Unavailable(_) => {
+                            "unavailable; Activation remains committed"
+                        }
+                        crate::runtime::ReloadOutcome::Failed(_) => {
+                            "failed; Activation remains committed"
+                        }
+                    };
+                    writeln!(output, "Ghostty reload: {status}.")?;
+                }
+                return Ok(());
+            }
+            _ => writeln!(output, "Choose y or n; saved Profile remains.")?,
+        }
+    }
+}
+
+fn create_prompt(
+    input: &mut impl Iterator<Item = io::Result<String>>,
+    output: &mut impl Write,
+    label: &str,
+) -> Result<Option<String>, CliError> {
+    write_text(output, label)?;
+    output.flush()?;
+    Ok(input
+        .next()
+        .transpose()?
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !matches!(line.as_str(), "cancel" | "esc" | "b" | "\x1b")))
+}
+
+fn create_cancelled(output: &mut impl Write) -> Result<(), CliError> {
+    writeln!(output, "Cancelled; no Profile saved.")?;
+    Ok(())
+}
+
+fn generate_create_image(
+    workflow: &crate::profile_workflow::ProfileWorkflows,
+    draft: &mut crate::profile_workflow::ProfileDraft,
+    output: &mut impl Write,
+) -> Result<(), CliError> {
+    let mut bytes = [0; 32];
+    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let seed = crate::domain::Sha256Digest::from_bytes(bytes);
+    workflow.generate_image(draft, seed)?;
+    writeln!(
+        output,
+        "Generated variant {seed} (256x256 PNG); held in memory until Save."
+    )?;
+    Ok(())
+}
+
+// XDG user-dirs are quoted paths with $HOME expansion, not shell expressions.
+fn create_image_roots(paths: &InitPaths) -> [PathBuf; 2] {
+    let config_home = paths
+        .xdg_config_home
+        .as_ref()
+        .filter(|path| path.is_absolute())
+        .cloned()
+        .unwrap_or_else(|| paths.home.join(".config"));
+    let config = fs::read_to_string(config_home.join("user-dirs.dirs")).unwrap_or_default();
+    let directory = |key: &str, fallback: &str| {
+        let value = config
+            .lines()
+            .filter_map(|line| line.trim().split_once('='))
+            .find(|(name, _)| name.trim() == key)
+            .map(|(_, value)| value.trim());
+        value
+            .and_then(|value| parse_user_directory(value, &paths.home))
+            .unwrap_or_else(|| paths.home.join(fallback))
+    };
+    [
+        directory("XDG_DOWNLOAD_DIR", "Downloads"),
+        directory("XDG_PICTURES_DIR", "Pictures"),
+    ]
+}
+
+fn parse_user_directory(value: &str, home: &Path) -> Option<PathBuf> {
+    let quoted = value.strip_prefix('"')?;
+    let home_relative = quoted.starts_with("$HOME/") || quoted.starts_with("$HOME\"");
+    let mut chars = quoted
+        .strip_prefix("$HOME")
+        .filter(|_| home_relative)
+        .unwrap_or(quoted)
+        .chars();
+    let mut decoded = String::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                let rest = chars.as_str().trim();
+                if !rest.is_empty() && !rest.starts_with('#') {
+                    return None;
+                }
+                let path = if home_relative {
+                    home.join(decoded.trim_start_matches('/'))
+                } else {
+                    PathBuf::from(decoded)
+                };
+                return path.is_absolute().then_some(path);
+            }
+            '\\' => {
+                let escaped = chars.next()?;
+                if !matches!(escaped, '$' | '`' | '"' | '\\') {
+                    decoded.push('\\');
+                }
+                decoded.push(escaped);
+            }
+            '$' | '`' => return None,
+            _ => decoded.push(c),
+        }
+    }
+    None
+}
+
+fn pick_create_image(
+    workflow: &crate::profile_workflow::ProfileWorkflows,
+    draft: &mut crate::profile_workflow::ProfileDraft,
+    paths: &InitPaths,
+    input: &mut impl Iterator<Item = io::Result<String>>,
+    output: &mut impl Write,
+) -> Result<bool, CliError> {
+    pick_image_with(paths, input, output, |path| {
+        workflow.import_image(draft, path)
+    })
+}
+
+fn pick_image_with(
+    paths: &InitPaths,
+    input: &mut impl Iterator<Item = io::Result<String>>,
+    output: &mut impl Write,
+    mut import: impl FnMut(&Path) -> Result<(), crate::profile_workflow::WorkflowError>,
+) -> Result<bool, CliError> {
+    let roots = create_image_roots(paths);
+    let mut current = roots
+        .iter()
+        .find(|path| path.is_dir())
+        .cloned()
+        .unwrap_or_else(|| paths.home.clone());
+    let mut search = String::new();
+    loop {
+        writeln!(
+            output,
+            "Images in {} (Downloads: {}, Pictures: {}):",
+            current.display(),
+            roots[0].display(),
+            roots[1].display()
+        )?;
+        let entries = match fs::read_dir(&current) {
+            Ok(entries) => {
+                let mut found = Vec::new();
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let Ok(name) = entry.file_name().into_string() else {
+                        continue;
+                    };
+                    let supported = path.extension().and_then(|s| s.to_str()).is_some_and(|s| {
+                        matches!(s.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg")
+                    });
+                    if entry
+                        .file_type()
+                        .is_ok_and(|kind| kind.is_dir() || (kind.is_file() && supported))
+                        && name.to_lowercase().contains(&search.to_lowercase())
+                    {
+                        found.push(name);
+                    }
+                }
+                found.sort();
+                found
+            }
+            Err(error) => {
+                writeln!(
+                    output,
+                    "Cannot browse {}: {error}. Choose another location.",
+                    current.display()
+                )?;
+                Vec::new()
+            }
+        };
+        for (index, name) in entries.iter().take(100).enumerate() {
+            writeln!(output, "{}: {}", index + 1, name)?;
+        }
+        if entries.len() > 100 {
+            writeln!(
+                output,
+                "More results: use /text to narrow the list, or type a path."
+            )?;
+        }
+        let Some(choice) = create_prompt(
+            input,
+            output,
+            "Number/relative path, path:/absolute/path, .. parent, d Downloads, p Pictures, /text search, or cancel: ",
+        )?
+        else {
+            return Ok(false);
+        };
+        if let Some(query) = choice.strip_prefix('/') {
+            // Absolute paths can also be entered using an explicit 'path:' prefix.
+            search = query.to_owned();
+            continue;
+        }
+        if choice == "d" || choice == "p" {
+            let destination = &roots[usize::from(choice == "p")];
+            if destination.is_dir() {
+                current = destination.clone();
+                search.clear();
+            } else {
+                writeln!(
+                    output,
+                    "{} is not available; choose another location.",
+                    destination.display()
+                )?;
+            }
+            continue;
+        }
+        if choice == ".." {
+            if let Some(parent) = current.parent() {
+                current = parent.to_owned();
+                search.clear();
+            }
+            continue;
+        }
+        let selected = choice
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| entries.get(index).filter(|_| index < 100))
+            .map(|name| current.join(name))
+            .unwrap_or_else(|| {
+                let value = choice.strip_prefix("path:").unwrap_or(&choice);
+                let path = PathBuf::from(value);
+                if path.is_absolute() {
+                    path
+                } else {
+                    current.join(path)
+                }
+            });
+        if selected.is_dir() {
+            current = selected;
+            search.clear();
+            continue;
+        }
+        match import(&selected) {
+            Ok(()) => return Ok(true),
+            Err(error) => writeln!(
+                output,
+                "Cannot use {}: {error}. Choose another PNG/JPEG; nothing saved.",
+                selected.display()
+            )?,
+        }
+    }
+}
+
+fn command_new(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    if let [name, flag, seed] = args
+        && flag == "--generate"
+    {
+        return new_generated(name, seed, output);
+    }
+    if let [name] = args {
+        let stdin = io::stdin();
+        let mut lines = stdin.lock().lines();
+        let Some(image) = prompt_tui(&mut lines, output, "PNG/JPEG image path (b to cancel): ")?
+        else {
+            return Ok(());
+        };
+        return command_new(&[name.clone(), image], output);
+    }
+    match args {
+        [name, flag, source, path_flag, path] if flag == "--source" && path_flag == "--path" => {
+            return new_from_source(name, source, path, false, output);
+        }
+        [name, flag, source, path_flag, path, apply]
+            if flag == "--source" && path_flag == "--path" && apply == "--apply" =>
+        {
+            return new_from_source(name, source, path, true, output);
+        }
+        _ => {}
+    }
+    let (name, image, apply) = match args {
+        [name, image] => (name, image, false),
+        [name, image, flag] if flag == "--apply" => (name, image, true),
+        _ => {
+            return Err(CliError::Usage(
+                "expected new PROFILE [IMAGE [--apply]] or new PROFILE --source SOURCE --path CANDIDATE [--apply]".into(),
+            ));
+        }
+    };
+    let id = IntentId::from_str(name)?;
+    let application = Application::load(None)?;
+    let source = application
+        .config
+        .sources
+        .iter()
+        .filter(|(_, source)| matches!(source, SourceIntent::LocalDirectory { path } if path == "profiles"))
+        .min_by_key(|(id, _)| (id.as_str() != "welcome", id.as_str()))
+        .map(|(id, _)| id)
+        .ok_or_else(|| CliError::Intent("new needs a local Source pointing to profiles/; use source add SOURCE local DIRECTORY first".into()))?;
+    let root = application.paths.managed_root();
+    let profiles = profile_directory(&root)?;
+    let input = Path::new(image);
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options.open(input)?;
+    if !file.metadata()?.is_file() || file.metadata()?.len() > 32 * 1024 * 1024 {
+        return Err(CliError::Intent(
+            "image must be regular PNG/JPEG under 32 MiB".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(32 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err(CliError::Intent("image exceeds 32 MiB".into()));
+    }
+    let format = image::guess_format(&bytes)
+        .map_err(|_| CliError::Intent("image must be PNG or JPEG".into()))?;
+    let extension = match format {
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::Jpeg => "jpg",
+        _ => return Err(CliError::Intent("image must be PNG or JPEG".into())),
+    };
+    let mut reader = image::ImageReader::with_format(io::Cursor::new(&bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    if u64::from(decoded.width()) * u64::from(decoded.height()) > 16_777_216 {
+        return Err(CliError::Intent("image dimensions exceed limit".into()));
+    }
+    let digest = hex_sha256(&bytes);
+    let profile = format!(
+        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.{extension}\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n"
+    );
+    parse_named_profile_toml(id.as_str(), &application.config, &profile)?;
+    let profile_path = profiles.join(format!("{id}.toml"));
+    let image_path = profiles.join(format!("{id}.{extension}"));
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    let image_exists = path_exists(&image_path)?;
+    let profile_exists = path_exists(&profile_path)?;
+    if image_exists && !existing_equal(&image_path, &bytes)? {
+        return Err(CliError::Intent(format!(
+            "Image {} already differs; no files changed",
+            image_path.display()
+        )));
+    }
+    if profile_exists {
+        if !image_exists || read_text(&profile_path)? != profile {
+            return Err(CliError::Intent(format!(
+                "Profile {id} already differs; no files changed"
+            )));
+        }
+    } else {
+        if !image_exists {
+            create_private(&image_path, &bytes)?;
+        }
+        if let Err(error) = create_private(&profile_path, profile.as_bytes()) {
+            // A published Profile must keep its image even if directory sync failed.
+            if !image_exists && fs::symlink_metadata(&profile_path).is_err() {
+                let _ = fs::remove_file(&image_path);
+            }
+            return Err(error);
+        }
+    }
+    drop(_lock);
+    writeln!(output, "Saved {id}.")?;
+    print_saved_preview(&application, &id, output)?;
+    if apply {
+        print_apply_outcome(application.apply(&id)?, output)?;
+    } else {
+        writeln!(output, "Run ghostty-wall apply {id} to activate.")?;
+    }
+    Ok(())
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    crate::domain::Sha256Digest::from_bytes(Sha256::digest(bytes).into()).to_string()
+}
+
+fn new_generated(name: &str, seed: &str, output: &mut impl Write) -> Result<(), CliError> {
+    let id = IntentId::from_str(name)?;
+    let seed = crate::domain::Sha256Digest::from_str(seed)?;
+    let application = Application::load(None)?;
+    let source = application.config.sources.iter()
+        .find(|(_, source)| matches!(source, SourceIntent::LocalDirectory { path } if path == "profiles"))
+        .map(|(id, _)| id)
+        .ok_or_else(|| CliError::Intent("generation needs a local Source pointing to profiles/; no files changed".into()))?;
+    let width = 256u32;
+    let height = 256u32;
+    let raw = seed.as_bytes();
+    let image = image::RgbaImage::from_fn(width, height, |x, y| {
+        image::Rgba([
+            raw[0].wrapping_add((255 * x / (width - 1)) as u8),
+            raw[1].wrapping_add((255 * y / (height - 1)) as u8),
+            raw[2].wrapping_add((255 * (x + y) / (width + height - 2)) as u8),
+            255,
+        ])
+    });
+    let mut cursor = io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    let bytes = cursor.into_inner();
+    let digest = hex_sha256(&bytes);
+    let text = format!(
+        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.png\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[wallpaper.generation]\nalgorithm = \"gradient-v1\"\nseed = \"{seed}\"\nwidth = {width}\nheight = {height}\n\n[colors]\nmode = \"generated\"\n"
+    );
+    parse_named_profile_toml(id.as_str(), &application.config, &text)?;
+    let root = application.paths.managed_root();
+    let profiles = profile_directory(&root)?;
+    let profile = profiles.join(format!("{id}.toml"));
+    let image = profiles.join(format!("{id}.png"));
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    if path_exists(&profile)? || path_exists(&image)? {
+        return Err(CliError::Intent(format!(
+            "Profile or image {id} already exists; no files changed"
+        )));
+    }
+    create_private(&image, &bytes)?;
+    if let Err(error) = create_private(&profile, text.as_bytes()) {
+        if !path_exists(&profile)? {
+            let _ = fs::remove_file(&image);
+        }
+        return Err(error);
+    }
+    drop(_lock);
+    writeln!(output, "Saved {id} (gradient-v1, seed {seed}).")?;
+    print_saved_preview(&application, &id, output)?;
+    writeln!(output, "Run ghostty-wall apply {id} to activate.")?;
+    Ok(())
+}
+
+fn new_from_source(
+    name: &str,
+    source: &str,
+    candidate: &str,
+    apply: bool,
+    output: &mut impl Write,
+) -> Result<(), CliError> {
+    let id = IntentId::from_str(name)?;
+    let source_id = IntentId::from_str(source)?;
+    let application = Application::load(None)?;
+    if !application
+        .config
+        .sources
+        .iter()
+        .any(|(key, _)| key == &source_id)
+    {
+        return Err(CliError::Intent(format!(
+            "Source {source} not found; no files changed"
+        )));
+    }
+    let candidate = toml_edit::Value::from(candidate).to_string();
+    let text = format!(
+        "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = {candidate}\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n"
+    );
+    parse_named_profile_toml(id.as_str(), &application.config, &text)?;
+    let root = application.paths.managed_root();
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    create_private(
+        &profile_directory(&root)?.join(format!("{id}.toml")),
+        text.as_bytes(),
+    )?;
+    drop(_lock);
+    writeln!(output, "Saved {id}.")?;
+    print_saved_preview(&application, &id, output)?;
+    if apply {
+        print_apply_outcome(application.apply(&id)?, output)?;
+    } else {
+        writeln!(output, "Run ghostty-wall apply {id} to activate.")?;
+    }
+    Ok(())
+}
+
+fn command_source(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    let (id, kind, location, options) = match args {
+        [action, id, kind, location, options @ ..] if action == "add" => (id, kind, location, options),
+        _ => return Err(CliError::Usage("expected source add SOURCE local DIRECTORY or source add SOURCE github OWNER/REPO [--ref REF] [--path PATH]".into())),
+    };
+    let mut reference = None;
+    let mut subpath = None;
+    let mut position = 0;
+    while position < options.len() {
+        match options.get(position).map(String::as_str) {
+            Some("--ref") if kind == "github" && reference.is_none() => {
+                reference = Some(
+                    options
+                        .get(position + 1)
+                        .ok_or_else(|| CliError::Usage("--ref requires value".into()))?,
+                );
+            }
+            Some("--path") if kind == "github" && subpath.is_none() => {
+                subpath = Some(
+                    options
+                        .get(position + 1)
+                        .ok_or_else(|| CliError::Usage("--path requires value".into()))?,
+                );
+            }
+            _ => return Err(CliError::Usage("invalid Source options".into())),
+        }
+        position += 2;
+    }
+    let id = IntentId::from_str(id)?;
+    if !matches!(kind.as_str(), "local" | "github") {
+        return Err(CliError::Usage(
+            "Source kind must be local or github".into(),
+        ));
+    }
+    let paths = process_paths()?;
+    let root = paths.managed_root();
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    let config_path = root.join("config.toml");
+    let original = read_text(&config_path)?;
+    let parsed = parse_config_toml(&original)?;
+    let previous = parsed
+        .sources
+        .iter()
+        .find(|(key, _)| key == &id)
+        .map(|(_, source)| source);
+    let mut doc: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|error: toml_edit::TomlError| CliError::Intent(error.to_string()))?;
+    let mut table = toml_edit::Table::new();
+    if kind == "local" {
+        table["kind"] = toml_edit::value("local-directory");
+        table["path"] = toml_edit::value(location.as_str());
+    } else {
+        table["kind"] = toml_edit::value("github");
+        table["repository"] = toml_edit::value(location.as_str());
+        if let Some(reference) = reference {
+            table["ref"] = toml_edit::value(reference.as_str());
+        }
+        if let Some(path) = subpath {
+            table["path"] = toml_edit::value(path.as_str());
+        }
+    }
+    doc["sources"][id.as_str()] = toml_edit::Item::Table(table);
+    let revised = doc.to_string();
+    let parsed_revised = parse_config_toml(&revised)?;
+    if let Some(old) = previous {
+        if parsed_revised
+            .sources
+            .iter()
+            .any(|(key, new)| key == &id && new == old)
+        {
+            writeln!(output, "Source {id} already configured.")?;
+            return Ok(());
+        }
+        return Err(CliError::Intent(format!(
+            "Source {id} already differs; no files changed"
+        )));
+    }
+    atomic_intent_edit(&config_path, revised.as_bytes())?;
+    writeln!(output, "Added Source {id}.")?;
+    Ok(())
+}
+
+fn command_edit(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    if args.len() <= 1 {
+        return editor::command(args, output);
+    }
+    let [name, field, input] = args else {
+        return Err(CliError::Usage(
+            "expected edit [PROFILE] or edit PROFILE FIELD VALUE".into(),
+        ));
+    };
+    let id = IntentId::from_str(name)?;
+    let application = Application::load(None)?;
+    let root = application.paths.managed_root();
+    let path = profile_directory(&root)?.join(format!("{id}.toml"));
+    let prior = read_text(&path)?;
+    let (_, validated) = parse_named_profile_toml(id.as_str(), &application.config, &prior)?;
+    let planned_colors = if field.starts_with("colors.")
+        && field != "colors.theme"
+        && field != "colors.mode"
+        && !matches!(
+            validated.colors,
+            Some(ColorsIntent::Explicit { .. } | ColorsIntent::GeneratedWithOverrides(_))
+        )
+        && !(validated.schema_version == 2
+            && matches!(validated.colors, Some(ColorsIntent::Generated)))
+    {
+        Some(application.plan(&id)?)
+    } else {
+        None
+    };
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    let original = read_text(&path)?;
+    if original != prior {
+        return Err(CliError::Intent(format!(
+            "Profile {id} changed while editing; no files changed; retry"
+        )));
+    }
+    let mut doc: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|error: toml_edit::TomlError| CliError::Intent(error.to_string()))?;
+    let value = match field.as_str() {
+        "wallpaper.fit"
+        | "wallpaper.position"
+        | "wallpaper.source"
+        | "wallpaper.path"
+        | "terminal.cursor_style"
+        | "colors.theme"
+        | "colors.mode"
+        | "wallpaper.mode" => toml_edit::value(input.as_str()),
+        "wallpaper.opacity"
+        | "terminal.font_size"
+        | "terminal.background_opacity"
+        | "terminal.background_blur_intensity"
+        | "wallpaper.repeat" => toml_edit::Item::Value(
+            input
+                .parse::<toml_edit::Value>()
+                .map_err(|error| CliError::Usage(format!("invalid {field}: {error}")))?,
+        ),
+        "colors.background"
+        | "colors.foreground"
+        | "colors.cursor"
+        | "colors.selection_background"
+        | "colors.selection_foreground" => toml_edit::value(input.as_str()),
+        _ if field.starts_with("colors.palette.") => toml_edit::value(input.as_str()),
+        _ => {
+            return Err(CliError::Usage(format!(
+                "unsupported field {field}; see user guide"
+            )));
+        }
+    };
+    if let Some(property) = field.strip_prefix("terminal.") {
+        doc["terminal"][property] = value;
+    } else if let Some(property) = field.strip_prefix("wallpaper.") {
+        if property == "mode" {
+            if !matches!(input.as_str(), "none" | "unmanaged") {
+                return Err(CliError::Usage(
+                    "wallpaper.mode must be none or unmanaged".into(),
+                ));
+            }
+            if input == "unmanaged" {
+                doc.remove("wallpaper");
+            } else {
+                let mut table = toml_edit::Table::new();
+                table["mode"] = toml_edit::value("none");
+                doc["wallpaper"] = toml_edit::Item::Table(table);
+            }
+        } else {
+            if doc["wallpaper"].is_none() {
+                return Err(CliError::Usage(
+                    "Profile has no wallpaper; use new or edit existing source wallpaper".into(),
+                ));
+            }
+            if doc["wallpaper"]["mode"].as_str() != Some("source") {
+                return Err(CliError::Usage(
+                    "wallpaper must use a Source to edit its options".into(),
+                ));
+            }
+            if property == "path" {
+                doc["wallpaper"]["selection"] = toml_edit::value("path");
+            }
+            doc["wallpaper"][property] = value;
+        }
+    } else if let Some(property) = field.strip_prefix("colors.") {
+        if property == "mode" {
+            if !matches!(input.as_str(), "generated" | "unmanaged") {
+                return Err(CliError::Usage(
+                    "colors.mode must be generated or unmanaged; use colors.theme for a theme"
+                        .into(),
+                ));
+            }
+            if input == "unmanaged" {
+                doc.remove("colors");
+            } else {
+                let mut table = toml_edit::Table::new();
+                table["mode"] = toml_edit::value("generated");
+                doc["colors"] = toml_edit::Item::Table(table);
+            }
+        } else if property == "theme" {
+            doc["colors"] = toml_edit::Item::Table(toml_edit::Table::new());
+            doc["colors"]["mode"] = toml_edit::value("theme");
+            doc["colors"]["theme"] = value;
+        } else {
+            if validated.schema_version == 2 && doc["colors"]["mode"].as_str() == Some("generated")
+            {
+                if input != "auto" {
+                    input.parse::<crate::domain::Color>()?;
+                }
+                if doc["colors"].get("overrides").is_none() {
+                    doc["colors"]["overrides"] = toml_edit::Item::Table(toml_edit::Table::new());
+                }
+                if let Some(index) = property.strip_prefix("palette.") {
+                    let index: usize = index
+                        .parse()
+                        .map_err(|_| CliError::Usage("palette index must be 0..15".into()))?;
+                    if index >= 16 {
+                        return Err(CliError::Usage("palette index must be 0..15".into()));
+                    }
+                    if doc["colors"]["overrides"].get("palette").is_none() {
+                        let mut palette = toml_edit::Array::new();
+                        for _ in 0..16 {
+                            palette.push("auto");
+                        }
+                        doc["colors"]["overrides"]["palette"] = toml_edit::value(palette);
+                    }
+                    doc["colors"]["overrides"]["palette"]
+                        .as_array_mut()
+                        .ok_or_else(|| CliError::Intent("invalid overrides palette".into()))?
+                        .replace(index, input.as_str());
+                } else {
+                    doc["colors"]["overrides"][property] = value;
+                }
+            } else {
+                if input == "auto" {
+                    return Err(CliError::Usage(
+                        "auto requires generated colors in a version 2 Profile".into(),
+                    ));
+                }
+                if doc["colors"]["mode"].as_str() != Some("explicit") {
+                    let colors = planned_colors
+                        .as_ref()
+                        .and_then(|plan| plan.pointer("/environment/manifest/colors"))
+                        .ok_or_else(|| {
+                            CliError::Usage("Profile has no resolved colors to customize".into())
+                        })?;
+                    let mut table = toml_edit::Table::new();
+                    table["mode"] = toml_edit::value("explicit");
+                    for key in [
+                        "background",
+                        "foreground",
+                        "cursor",
+                        "selection_background",
+                        "selection_foreground",
+                    ] {
+                        if let Some(color) = colors[key].as_str() {
+                            table[key] = toml_edit::value(color);
+                        }
+                    }
+                    let palette = colors["palette"]
+                        .as_array()
+                        .ok_or_else(|| CliError::Intent("resolved colors lack palette".into()))?;
+                    let mut values = toml_edit::Array::new();
+                    for color in palette {
+                        values.push(
+                            color.as_str().ok_or_else(|| {
+                                CliError::Intent("invalid resolved palette".into())
+                            })?,
+                        );
+                    }
+                    table["palette"] = toml_edit::value(values);
+                    doc["colors"] = toml_edit::Item::Table(table);
+                }
+                if let Some(index) = property.strip_prefix("palette.") {
+                    let index: usize = index
+                        .parse()
+                        .map_err(|_| CliError::Usage("palette index must be 0..15".into()))?;
+                    if index >= 16 {
+                        return Err(CliError::Usage("palette index must be 0..15".into()));
+                    }
+                    doc["colors"]["palette"]
+                        .as_array_mut()
+                        .ok_or_else(|| CliError::Intent("invalid explicit palette".into()))?
+                        .replace(index, input.as_str());
+                } else {
+                    doc["colors"][property] = value;
+                }
+            }
+        }
+    }
+    let revised = doc.to_string();
+    parse_named_profile_toml(id.as_str(), &application.config, &revised)?;
+    atomic_intent_edit(&path, revised.as_bytes())?;
+    drop(_lock);
+    writeln!(output, "Updated {id}.")?;
+    print_saved_preview(&application, &id, output)
+}
+
+fn atomic_intent_edit(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    match crate::init::atomic_edit(path, path, bytes) {
+        Err(crate::init::InitError::HookPublicationUncertain { path, source }) => {
+            Err(CliError::Intent(format!(
+                "Intent edit at {} may already be published; inspect before retrying: {source}",
+                path.display()
+            )))
+        }
+        other => other.map_err(CliError::Init),
+    }
+}
+
+fn print_saved_preview(
+    application: &Application,
+    id: &IntentId,
+    output: &mut impl Write,
+) -> Result<(), CliError> {
+    match application.plan(id) {
+        Ok(plan) => write_text(output, &format_plan_preview(&plan)),
+        Err(error) => {
+            writeln!(
+                output,
+                "Profile {id} saved, but preview unavailable: {error}. Fix Source, then run preview {id}."
+            )?;
+            Ok(())
+        }
+    }
+}
+
+fn command_profile_file(
+    args: &[String],
+    operation: &str,
+    output: &mut impl Write,
+) -> Result<(), CliError> {
+    let (old, new) = match (operation, args) {
+        ("rename" | "duplicate", [old, new]) => (old, Some(IntentId::from_str(new)?)),
+        _ => return Err(CliError::Usage(format!("expected {operation} PROFILE NEW"))),
+    };
+    let old = IntentId::from_str(old)?;
+    let application = Application::load(None)?;
+    let root = application.paths.managed_root();
+    let _lock = crate::recovery::exclusive_state_lock(&root.join("state.lock"))
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    let directory = profile_directory(&root)?;
+    let original = directory.join(format!("{old}.toml"));
+    if operation == "rename" && new.as_ref().is_some_and(|id| id == &old) {
+        writeln!(output, "Profile {old} unchanged.")?;
+        return Ok(());
+    }
+    let text = read_text(&original)?;
+    parse_named_profile_toml(old.as_str(), &application.config, &text)?;
+    if operation == "rename" && old.as_str() == "welcome" {
+        return Err(CliError::Intent(
+            "Installed Welcome cannot be renamed; no files changed".into(),
+        ));
+    }
+    if operation == "rename" {
+        // RFC 0003: a rename must not make the active Profile deletable under
+        // another name. Hold the lock for both guards and the intent mutation.
+        let history = crate::history::inspect_history_unlocked(&root).map_err(|error| {
+            CliError::Intent(format!(
+                "cannot {operation} {old}: {error}; no files changed"
+            ))
+        })?;
+        if let Some(latest) = history.latest() {
+            if latest.profile_id() == Some(&old) {
+                return Err(CliError::Intent(format!(
+                    "Profile {old} is active; no files changed. Apply another Profile before {operation}"
+                )));
+            }
+            if latest.profile_id().is_none() {
+                return Err(CliError::Intent(format!(
+                    "Cannot determine an active Profile after History replay; no files changed. Apply another Profile before {operation} of {old}"
+                )));
+            }
+        }
+    }
+    match operation {
+        "duplicate" => {
+            let target =
+                directory.join(format!("{}.toml", new.as_ref().expect("validated new ID")));
+            if path_exists(&target)? {
+                if read_text(&target)? != text {
+                    return Err(CliError::Intent(format!(
+                        "Profile {} already differs; no files changed",
+                        new.as_ref().expect("validated new ID")
+                    )));
+                }
+            } else {
+                create_private(&target, text.as_bytes())?;
+            }
+        }
+        "rename" => {
+            let target =
+                directory.join(format!("{}.toml", new.as_ref().expect("validated new ID")));
+            if path_exists(&target)? {
+                return Err(CliError::Intent(format!(
+                    "Profile {} already exists; no files changed",
+                    new.as_ref().expect("validated new ID")
+                )));
+            }
+            fs::rename(&original, target)?;
+        }
+        _ => unreachable!(),
+    }
+    fs::File::open(&directory)?.sync_all().map_err(|error| {
+        CliError::Intent(format!(
+            "Profile {operation} may already be published at {}; inspect before retrying: {error}",
+            directory.display()
+        ))
+    })?;
+    writeln!(
+        output,
+        "{operation} Profile {old}{}.",
+        new.map_or(String::new(), |id| format!(" → {id}"))
+    )?;
+    Ok(())
+}
+
+fn path_exists(path: &Path) -> Result<bool, CliError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn existing_equal(path: &Path, expected: &[u8]) -> Result<bool, CliError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() || file.metadata()?.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    let mut bytes = Vec::new();
+    file.take(expected.len() as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes == expected)
+}
+
+fn profile_directory(root: &Path) -> Result<PathBuf, CliError> {
+    for path in [root.to_owned(), root.join("profiles")] {
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(CliError::Intent(format!(
+                "unsafe managed directory {}; no files changed",
+                path.display()
+            )));
+        }
+    }
+    Ok(root.join("profiles"))
+}
+
+fn create_private(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let parent = path
+        .parent()
+        .ok_or_else(|| CliError::Intent("invalid Profile path".into()))?;
+    let temp = parent.join(format!(
+        ".tmp-new-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        // Publish only complete bytes; hard link refuses an existing final path.
+        fs::hard_link(&temp, path)?;
+        fs::File::open(parent)?.sync_all().map_err(|error| {
+            CliError::Intent(format!(
+                "File {} may already be published; inspect before retrying: {error}",
+                path.display()
+            ))
+        })?;
+        Ok::<(), CliError>(())
+    })();
+    let _ = fs::remove_file(&temp);
+    result
+}
+
+fn command_list(output: &mut impl Write) -> Result<(), CliError> {
+    let application = Application::load(None)?;
+    for profile in profile_ids(&application.paths.managed_root().join("profiles"))? {
+        match application.load_profile(&profile) {
+            Ok(_) => writeln!(output, "{profile}")?,
+            Err(error) => writeln!(output, "{profile} (invalid: {error})")?,
+        }
+    }
+    Ok(())
+}
+
+fn command_history(output: &mut impl Write) -> Result<(), CliError> {
+    let history = crate::history::inspect_history(&process_paths()?.managed_root())
+        .map_err(|error| CliError::Intent(error.to_string()))?;
+    for activation in history.activations() {
+        writeln!(
+            output,
+            "{} {}",
+            activation.sequence(),
+            activation.environment_id()
+        )?;
+    }
+    Ok(())
+}
+
 fn command_apply(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
     let options = ProfileOptions::parse(args, false)?;
     let application = Application::load(options.seed)?;
@@ -209,7 +1423,26 @@ fn command_tui(
     output: &mut impl Write,
     input_errors: &mut impl Write,
 ) -> Result<(), CliError> {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        return write_text(
+            output,
+            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k select without activating; Enter/p toggles the internal sample\non small terminals. Tab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, review, Save, then Use now / Not now.\nEdit: Wallpaper/Colors/Terminal, confirmed Save and use, or cancel.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nMinimum 40x12; smaller terminals show a resize notice (Esc cancels).\nCreate errors: F1 details. Editor/main results: v details.\nInternal previews are approximate, NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings, doctor, init/repair, update and uninstall remain in Actions.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
+        );
+    }
     let seed = parse_seed_only(args)?;
+    let paths = process_paths()?;
+    if !paths.managed_root().join("config.toml").exists() {
+        write_text(
+            output,
+            "Not initialized. Type i then Enter to initialize, or q to quit: ",
+        )?;
+        output.flush()?;
+        let stdin = io::stdin();
+        if stdin.lock().lines().next().transpose()?.as_deref() != Some("i") {
+            return Ok(());
+        }
+        print_init_report(init(&paths)?, output)?;
+    }
     let mut application = Application::load(seed)?;
     let profiles = profile_ids(&application.paths.managed_root().join("profiles"))?;
     let sources = application
@@ -219,9 +1452,11 @@ fn command_tui(
         .map(|(id, _)| id.clone())
         .collect();
     let mut browser = TerminalBrowser::new(sources, profiles);
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        return management::run(output, &mut application, &mut browser, seed);
+    }
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
-
     loop {
         write_text(output, &browser.render())?;
         if browser.mode() == BrowserMode::Preview {
@@ -235,6 +1470,52 @@ fn command_tui(
         }
         output.flush()?;
         let action = match lines.next().transpose()? {
+            Some(line)
+                if matches!(
+                    line.trim(),
+                    "n" | "m"
+                        | "o"
+                        | "e"
+                        | "r"
+                        | "d"
+                        | "x"
+                        | "h"
+                        | "s"
+                        | "?"
+                        | "t"
+                        | "c"
+                        | "w"
+                        | "l"
+                        | "P"
+                        | "p"
+                        | "D"
+                        | "u"
+                        | "U"
+                        | "I"
+                        | "y"
+                        | "R"
+                        | "W"
+                        | "Y"
+                        | "M"
+                        | "X"
+                ) =>
+            {
+                match tui_command(
+                    line.trim(),
+                    &mut lines,
+                    output,
+                    &mut application,
+                    &mut browser,
+                    seed,
+                    true,
+                ) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        writeln!(input_errors, "{error}")?;
+                    }
+                }
+                continue;
+            }
             Some(line) => match line.trim() {
                 "j" => BrowserAction::Down,
                 "k" => BrowserAction::Up,
@@ -244,14 +1525,277 @@ fn command_tui(
                 "b" | "esc" => BrowserAction::Back,
                 "q" => BrowserAction::Cancel,
                 _ => {
-                    writeln!(input_errors, "keys: j k tab enter a b q")?;
+                    writeln!(
+                        input_errors,
+                        "keys: ? actions, n new, tab pane, j/k move, enter preview, a apply, b back, q quit"
+                    )?;
                     continue;
                 }
             },
             None => BrowserAction::Cancel,
         };
-        browser.dispatch(action, &mut application)?;
+        if action == BrowserAction::Preview
+            && browser.mode() == BrowserMode::Browse
+            && browser.focus() == BrowserFocus::Sources
+            && browser.selected_source().is_some()
+        {
+            if let Err(error) = tui_command(
+                "m",
+                &mut lines,
+                output,
+                &mut application,
+                &mut browser,
+                seed,
+                true,
+            ) {
+                writeln!(input_errors, "{error}")?;
+            }
+            continue;
+        }
+        if let Err(error) = browser.dispatch(action, &mut application) {
+            writeln!(input_errors, "{error}")?;
+        }
     }
+}
+
+fn prompt_tui(
+    input: &mut impl Iterator<Item = io::Result<String>>,
+    output: &mut impl Write,
+    label: &str,
+) -> Result<Option<String>, CliError> {
+    write_text(output, label)?;
+    output.flush()?;
+    Ok(input
+        .next()
+        .transpose()?
+        .map(|value| value.trim().to_owned())
+        .filter(|value| value != "b" && value != "esc"))
+}
+
+fn tui_command(
+    action: &str,
+    input: &mut impl Iterator<Item = io::Result<String>>,
+    output: &mut impl Write,
+    application: &mut Application,
+    browser: &mut TerminalBrowser,
+    seed: Option<ResolutionSeed>,
+    resolve_preview: bool,
+) -> Result<(), CliError> {
+    macro_rules! ask {
+        ($label:expr) => {
+            match prompt_tui(input, output, $label)? {
+                Some(value) => value,
+                None => return Ok(()),
+            }
+        };
+    }
+    let selected = browser.selected_profile().cloned();
+    let target = match action {
+        "?" => {
+            write_text(
+                output,
+                "Tab pane  ↑↓/j/k move  Enter use Source / preview Profile  a apply  i image (full-screen)  b back  q quit\nActions (press ? in full-screen browser):\n",
+            )?;
+            for (key, label) in tui::ACTIONS {
+                writeln!(output, "{key}  {label}")?;
+            }
+            write_text(output, "Type b at prompt to go back.\n")?;
+            return Ok(());
+        }
+        "l" => {
+            command_list(output)?;
+            return Ok(());
+        }
+        "P" => {
+            let profile = selected.ok_or_else(|| CliError::Usage("select Profile first".into()))?;
+            serde_json::to_writer_pretty(&mut *output, &application.plan(&profile)?)?;
+            writeln!(output)?;
+            return Ok(());
+        }
+        "D" => {
+            command_doctor(output)?;
+            return Ok(());
+        }
+        "u" => {
+            update::run(true, output).map_err(CliError::Update)?;
+            return Ok(());
+        }
+        "U" => {
+            if ask!("Type update to install release (b to cancel): ") == "update" {
+                update::run(false, output).map_err(CliError::Update)?;
+            }
+            return Ok(());
+        }
+        "X" => {
+            if ask!("Type uninstall to remove integration (Intent and History stay): ")
+                == "uninstall"
+            {
+                command_uninstall(output)?;
+                browser.dispatch(BrowserAction::Cancel, application)?;
+            }
+            return Ok(());
+        }
+        "p" => {
+            if ask!("Type previous to replay prior Environment (b to cancel): ") != "previous" {
+                return Ok(());
+            }
+            command_previous(output)?;
+            None
+        }
+        "I" | "y" | "R" | "W" | "Y" | "M" => {
+            if action == "M" && ask!("Type migrate to import legacy configuration: ") != "migrate" {
+                return Ok(());
+            }
+            let args: &[&str] = match action {
+                "I" => &[],
+                "y" => &["--dry-run"],
+                "R" => &["--repair"],
+                "W" => &["--welcome"],
+                "Y" => &["--migrate-legacy", "--dry-run"],
+                _ => &["--migrate-legacy"],
+            };
+            command_init(
+                &args.iter().map(|arg| (*arg).into()).collect::<Vec<_>>(),
+                output,
+            )?;
+            None
+        }
+        "h" => {
+            writeln!(
+                output,
+                "History (sequence Environment; empty until first apply):"
+            )?;
+            command_history(output)?;
+            return Ok(());
+        }
+        "s" => {
+            writeln!(
+                output,
+                "Settings: Managed Root {}",
+                application.paths.managed_root().display()
+            )?;
+            writeln!(
+                output,
+                "Sources: {}. Profiles: {}.",
+                application.config.sources.len(),
+                profile_ids(&application.paths.managed_root().join("profiles"))?.len()
+            )?;
+            writeln!(
+                output,
+                "Use doctor for integration checks, init --repair for explicit repair, update to update binary."
+            )?;
+            return Ok(());
+        }
+        "n" | "N" => {
+            let name = ask!("New Profile ID: ");
+            let image = ask!("PNG/JPEG image path: ");
+            command_new(&[name.clone(), image], output)?;
+            Some(IntentId::from_str(&name)?)
+        }
+        "m" => {
+            let name = ask!("New Profile ID: ");
+            let source = if browser.focus() == BrowserFocus::Sources {
+                match browser.selected_source() {
+                    Some(id) => {
+                        writeln!(output, "Source: {id}")?;
+                        id.to_string()
+                    }
+                    None => ask!("Source ID (see Sources pane): "),
+                }
+            } else {
+                ask!("Source ID (see Sources pane): ")
+            };
+            let path = ask!("Candidate path relative to Source root: ");
+            new_from_source(&name, &source, &path, false, output)?;
+            Some(IntentId::from_str(&name)?)
+        }
+        "o" => {
+            let name = ask!("New Source ID: ");
+            let kind = ask!("Source kind (local/github): ");
+            let location = ask!("Directory path or owner/repo: ");
+            let mut args = vec!["add".into(), name, kind.clone(), location];
+            if kind == "github" {
+                let reference = ask!("Ref (blank for default): ");
+                if !reference.is_empty() {
+                    args.extend(["--ref".into(), reference]);
+                }
+                let path = ask!("Subdirectory (blank for repository root): ");
+                if !path.is_empty() {
+                    args.extend(["--path".into(), path]);
+                }
+            }
+            command_source(&args, output)?;
+            None
+        }
+        "e" | "f" | "c" | "t" | "w" => {
+            let profile = selected.ok_or_else(|| {
+                CliError::Usage("select Profile first (tab switches pane)".into())
+            })?;
+            let prefix = match action {
+                "c" => "colors.",
+                "t" => "terminal.",
+                "w" => "wallpaper.",
+                _ => "",
+            };
+            let fields = match action {
+                "c" => {
+                    "Color fields: mode, theme, background, foreground, cursor, selection_background, selection_foreground, palette.0..15"
+                }
+                "t" => {
+                    "Terminal fields: font_size, background_opacity, background_blur_intensity, cursor_style"
+                }
+                "w" => "Wallpaper fields: mode, source, path, fit, position, opacity, repeat",
+                _ => "Fields: wallpaper.*, colors.*, terminal.* (see user guide)",
+            };
+            writeln!(output, "{fields}")?;
+            let key = ask!("Field: ");
+            let field = if !prefix.is_empty() && !key.contains('.') {
+                format!("{prefix}{key}")
+            } else {
+                key
+            };
+            let value = ask!("Value: ");
+            command_edit(&[profile.to_string(), field, value], output)?;
+            Some(profile)
+        }
+        "r" | "d" | "x" => {
+            let profile = selected.ok_or_else(|| {
+                CliError::Usage("select Profile first (tab switches pane)".into())
+            })?;
+            if action == "x" {
+                delete::flow(Some(profile.as_str()), input, output)?;
+                None
+            } else {
+                let name = ask!("New Profile ID: ");
+                let operation = if action == "r" { "rename" } else { "duplicate" };
+                command_profile_file(&[profile.to_string(), name.clone()], operation, output)?;
+                Some(IntentId::from_str(&name)?)
+            }
+        }
+        _ => return Ok(()),
+    };
+    *application = Application::load(seed)?;
+    let profiles = profile_ids(&application.paths.managed_root().join("profiles"))?;
+    let selected_index = target
+        .as_ref()
+        .and_then(|id| profiles.iter().position(|item| item == id));
+    let sources = application
+        .config
+        .sources
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    *browser = TerminalBrowser::new(sources, profiles);
+    if let Some(index) = selected_index {
+        browser.dispatch(BrowserAction::NextPane, application)?;
+        for _ in 0..index {
+            browser.dispatch(BrowserAction::Down, application)?;
+        }
+        if resolve_preview {
+            browser.dispatch(BrowserAction::Preview, application)?;
+        }
+    }
+    Ok(())
 }
 
 struct Application {
@@ -289,10 +1833,18 @@ impl Application {
 
     fn plan(&self, profile_id: &IntentId) -> Result<Value, CliError> {
         let profile = self.load_profile(profile_id)?;
+        self.plan_intent(profile_id, &profile)
+    }
+
+    fn plan_intent(
+        &self,
+        profile_id: &IntentId,
+        profile: &ProfileIntent,
+    ) -> Result<Value, CliError> {
         let root = self.paths.managed_root();
         let reload = platform_reload_adapter();
         let platform = PlanPlatform::new(self.paths.ghostty_root_config(), reload.observation());
-        let github = uses_github(&self.config, &profile);
+        let github = uses_github(&self.config, profile);
         let theme = matches!(profile.colors, Some(ColorsIntent::Theme { .. }));
         let seed = self.seed.as_ref();
         let result = match (github, theme) {
@@ -302,7 +1854,7 @@ impl Application {
                 &root,
                 profile_id,
                 &self.config,
-                &profile,
+                profile,
                 seed,
                 &platform,
                 &self.github,
@@ -314,7 +1866,7 @@ impl Application {
                 &root,
                 profile_id,
                 &self.config,
-                &profile,
+                profile,
                 seed,
                 &platform,
                 &self.github,
@@ -325,7 +1877,7 @@ impl Application {
                 &root,
                 profile_id,
                 &self.config,
-                &profile,
+                profile,
                 seed,
                 &platform,
                 &self.themes,
@@ -336,7 +1888,7 @@ impl Application {
                 &root,
                 profile_id,
                 &self.config,
-                &profile,
+                profile,
                 seed,
                 &platform,
             ),
@@ -525,6 +2077,7 @@ fn profile_ids(directory: &Path) -> Result<Vec<IntentId>, CliError> {
             ids.push(stem);
         }
     }
+    ids.sort();
     Ok(ids)
 }
 
@@ -614,6 +2167,18 @@ fn print_init_report(
     Ok(())
 }
 
+fn reload_status(outcome: crate::runtime::ReloadOutcome) -> &'static str {
+    match outcome {
+        crate::runtime::ReloadOutcome::Succeeded => {
+            "action accepted; visible change is not verified"
+        }
+        crate::runtime::ReloadOutcome::Unavailable(_) => {
+            "unavailable; Activation remains committed"
+        }
+        crate::runtime::ReloadOutcome::Failed(_) => "failed; Activation remains committed",
+    }
+}
+
 fn print_apply_outcome(outcome: ApplyOutcome, output: &mut impl Write) -> Result<(), CliError> {
     writeln!(output, "Activated {}.", outcome.activation_id())?;
     writeln!(
@@ -640,6 +2205,7 @@ fn write_text(output: &mut impl Write, text: &str) -> Result<(), CliError> {
 #[derive(Debug)]
 enum CliError {
     Usage(String),
+    Input(String),
     Intent(String),
     Plan(PlanError),
     JsonPlan(i32),
@@ -653,13 +2219,26 @@ enum CliError {
     Preview(crate::terminal_browser::ImagePreviewError),
     Json(serde_json::Error),
     Update(UpdateError),
+    Workflow(crate::profile_workflow::WorkflowError),
 }
 
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
-            Self::Usage(_) => 2,
+            Self::Usage(_) | Self::Input(_) => 2,
             Self::Intent(_) => 3,
+            Self::Workflow(error) => match error {
+                crate::profile_workflow::WorkflowError::Id(_) => 2,
+                crate::profile_workflow::WorkflowError::Io { .. }
+                | crate::profile_workflow::WorkflowError::SaveFailed { .. }
+                | crate::profile_workflow::WorkflowError::PublicationUncertain { .. }
+                | crate::profile_workflow::WorkflowError::RollbackIncomplete { .. }
+                | crate::profile_workflow::WorkflowError::Apply(_)
+                | crate::profile_workflow::WorkflowError::Fallback { .. }
+                | crate::profile_workflow::WorkflowError::DeletionIncomplete { .. }
+                | crate::profile_workflow::WorkflowError::History(_) => 6,
+                _ => 3,
+            },
             Self::Plan(error) => error.exit_status(),
             Self::JsonPlan(code) => *code,
             Self::Apply(_)
@@ -680,7 +2259,9 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Usage(message) => write!(formatter, "{message}\n\n{HELP}"),
-            Self::Intent(message) | Self::Internal(message) => formatter.write_str(message),
+            Self::Input(message) | Self::Intent(message) | Self::Internal(message) => {
+                formatter.write_str(message)
+            }
             Self::Plan(error) => error.fmt(formatter),
             Self::JsonPlan(_) => Ok(()),
             Self::Apply(error) => error.fmt(formatter),
@@ -692,6 +2273,16 @@ impl std::fmt::Display for CliError {
             Self::Preview(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
             Self::Update(error) => error.fmt(formatter),
+            Self::Workflow(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl From<crate::profile_workflow::WorkflowError> for CliError {
+    fn from(error: crate::profile_workflow::WorkflowError) -> Self {
+        match error {
+            crate::profile_workflow::WorkflowError::Id(error) => error.into(),
+            other => Self::Workflow(other),
         }
     }
 }
@@ -703,7 +2294,10 @@ impl From<io::Error> for CliError {
 }
 impl From<crate::domain::ValidationError> for CliError {
     fn from(error: crate::domain::ValidationError) -> Self {
-        Self::Usage(error.to_string())
+        if error == crate::domain::ValidationError::InvalidIntentId {
+            return Self::Input("Profile and Source names must use lowercase letters, digits, and single internal hyphens (e.g. mia-prova); length 1..=64 bytes".into());
+        }
+        Self::Input(error.to_string())
     }
 }
 impl From<crate::codec::intent::IntentTomlError> for CliError {
@@ -739,6 +2333,45 @@ impl From<crate::terminal_browser::ImagePreviewError> for CliError {
 impl From<serde_json::Error> for CliError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
+    }
+}
+
+#[cfg(test)]
+mod create_cli_tests {
+    use super::*;
+
+    #[test]
+    fn user_directories_are_data_not_shell_and_preserve_localized_paths() {
+        let home = Path::new("/home/example");
+        for (value, expected) in [
+            (
+                r#""$HOME/Scaricati personali" # localized"#,
+                "/home/example/Scaricati personali",
+            ),
+            (r#""/media/Immagini""#, "/media/Immagini"),
+            (
+                r#""$HOME/Foto \"estate\"""#,
+                "/home/example/Foto \"estate\"",
+            ),
+            (r#""$HOME/Foto\$""#, "/home/example/Foto$"),
+            (r#""$HOME""#, "/home/example"),
+        ] {
+            assert_eq!(
+                parse_user_directory(value, home),
+                Some(PathBuf::from(expected)),
+                "{value}"
+            );
+        }
+        for invalid in [
+            r#""relative/path""#,
+            r#""$OTHER/Pictures""#,
+            r#""$(touch /tmp/not-executed)""#,
+            r#""/tmp/`command`""#,
+            r#""/tmp/valid"; command"#,
+            r#""unterminated"#,
+        ] {
+            assert_eq!(parse_user_directory(invalid, home), None, "{invalid}");
+        }
     }
 }
 

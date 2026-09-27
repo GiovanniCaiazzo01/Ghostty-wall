@@ -18,12 +18,19 @@ jobs:
       - name: Verify release gates
         run: |
           cargo fmt --check
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo test --all-targets --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
           bash scripts/test.sh
           bash scripts/test-install-release.sh
+          python3 website/generate.py
+          python3 website/test_site.py
+          git diff --exit-code -- website/dist
       - name: Build locked release binary
-        run: cargo build --locked --release
+        run: |
+          cargo build --locked --release
+          test "$(target/release/ghostty-wall --version)" = "ghostty-wall ${GITHUB_REF_NAME#v}"
+      - name: Verify CLI and TUI in disposable terminals
+        run: GHOSTTY_WALL_BIN="$PWD/target/release/ghostty-wall" python3 -B -m unittest discover -s tests -p '*pty.py' -v
       - name: Package Linux artifact
         env:
           VERSION: ${{ github.ref_name }}
@@ -40,6 +47,21 @@ jobs:
           alias="ghostty-wall-x86_64-unknown-linux-gnu.tar.gz"
           cp "$name.tar.gz" "$alias"
           sha256sum "$alias" > "$alias.sha256"
+      - name: Verify packaged artifact
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          name="ghostty-wall-${VERSION}-x86_64-unknown-linux-gnu"
+          sha256sum --check "$name.tar.gz.sha256"
+          sha256sum --check ghostty-wall-x86_64-unknown-linux-gnu.tar.gz.sha256
+          temp="$(mktemp -d)"
+          tar -xzf "$name.tar.gz" -C "$temp"
+          INSTALL_PREFIX="$temp/prefix" "$temp/$name/install.sh"
+          test "$("$temp/prefix/bin/ghostty-wall" --version)" = "ghostty-wall ${VERSION#v}"
+          export HOME="$temp/home" XDG_CONFIG_HOME="$temp/home/config" XDG_RUNTIME_DIR="$temp/runtime"
+          mkdir -p "$HOME"
+          "$temp/prefix/bin/ghostty-wall" init
+          "$temp/prefix/bin/ghostty-wall" doctor
       - name: Publish release assets
         env:
           GH_TOKEN: ${{ github.token }}

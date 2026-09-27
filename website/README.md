@@ -9,11 +9,11 @@ A responsive, static documentation site for [Ghostty Wall](https://github.com/Gi
 - `dist/app.js` handles navigation, copy controls, and the page outline.
 - `dist/release.js` reads GitHub’s public latest-release API when each page loads and updates the release badge and download label. The links always use `/releases/latest`; if the API is unavailable or rate-limited, they keep working with a generic label. No token is required or shipped.
 - All pages use the existing mascot PNG as their favicon.
-- Run `python generate.py` after editing content. Generated pages in `dist/` are tracked and deployed directly; no runtime dependencies are required.
+- Run `python3 generate.py` after editing content (Python 3.11+). Generated pages in `dist/` are tracked; Pages regenerates and checks them before deployment. No site runtime dependencies are required.
 
 ## Content sources
 
-The imported content was written against a snapshot of the project (`b36952afc28fc1c120c1a0c548caf3edd3eff988`). Review instructions against current CLI behavior when editing it; the pages do not automatically synchronize with repository changes.
+Content follows `README.md`, `docs/user-guide.md`, and current CLI help: guided creation, visual editing, safe deletion, full-screen management, Sources, palettes, History and updates. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version and minimum Rust version come from `Cargo.toml`. Tests check links, key feature coverage and version agreement.
 
 `dist/assets/mascot.png` and `dist/assets/welcome.png` are the project's existing images. The introduction terminal is an illustrative example, not a screenshot of CLI output; its palette strip is illustrative.
 
@@ -27,7 +27,7 @@ From the repository root, run:
 python3 -m http.server 8000 --directory website/dist
 ```
 
-Open http://localhost:8000. Serve the site over HTTP instead of opening the HTML files directly, because asset and navigation URLs are rooted at `/`.
+Open http://localhost:8000. Links and assets use relative URLs, supporting both local serving and GitHub project Pages.
 
 To edit the documentation content and regenerate the pages:
 
@@ -38,6 +38,6 @@ python3 website/test_site.py
 
 ## Host elsewhere
 
-GitHub Actions publishes `website/dist/` to project Pages on pushes to `main` that change `website/` or the Pages workflow. Set **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. URL: https://giovannicaiazzo01.github.io/Ghostty-wall/ . Site-only pushes do not trigger the tool release workflow; it runs only for `v1.*` tags.
+GitHub Actions regenerates and publishes `website/dist/` to project Pages on pushes to `main` that change the site, `Cargo.toml`, README, user guide or Pages workflow. Set **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. URL: https://giovannicaiazzo01.github.io/Ghostty-wall/ . Site-only pushes do not trigger the tool release workflow; it runs only for `v1.*` tags.
 
 To host elsewhere, publish the contents of `dist/` under any path. Keep page directories and assets together. No Node.js installation or build step is required. The release badge uses GitHub’s public API; fonts are loaded from Google Fonts. These features need an internet connection.
