@@ -444,7 +444,18 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Linear sRGB sample; v details"));
+        let expected = match crate::terminal_browser::TerminalGraphics::from_environment() {
+            crate::terminal_browser::TerminalGraphics::Ghostty => "Linear sRGB sample; v details",
+            crate::terminal_browser::TerminalGraphics::Unsupported => {
+                "Graphics unsupported; v details"
+            }
+        };
+        assert!(text.contains(expected), "{expected}: {text}");
+        assert!(
+            sample
+                .guidance()
+                .contains("Wallpaper uses linear-light sRGB compositing")
+        );
     }
 
     #[test]
