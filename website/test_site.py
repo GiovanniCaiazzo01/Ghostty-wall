@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
+import re
 import tomllib
 
 
@@ -44,5 +45,13 @@ for name, snippets in required.items():
 package = tomllib.loads((root.parent.parent / 'Cargo.toml').read_text())['package']
 for page in root.rglob('*.html'):
     assert f"Ghostty Wall {package['version']} · MIT License" in page.read_text(), page
-assert f"Rust {package['rust-version']}" in (root / 'installation/index.html').read_text()
-print('Site links, feature coverage and documentation version OK')
+for page in [root.parent.parent / 'README.md', root / 'installation/index.html']:
+    text = re.sub(r'<[^>]+>', '', page.read_text())
+    for snippet in ['curl -fsSL https://raw.githubusercontent.com/GiovanniCaiazzo01/Ghostty-wall/main/scripts/install-release.sh | bash',
+                    'only supported installation method', 'Linux x86_64',
+                    '~/.local/bin', 'command -v ghostty-wall', '~/.cargo/bin']:
+        assert snippet in text, (page, snippet)
+    for removed in ['cargo install', 'Install with Cargo', 'Manual installation',
+                    'Download the Linux binary', 'Try a source checkout']:
+        assert removed not in text, (page, removed)
+print('Site links, curl-only installation guidance, feature coverage and documentation version OK')

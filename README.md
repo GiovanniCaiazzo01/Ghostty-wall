@@ -6,9 +6,9 @@ A CLI for managing Ghostty wallpapers, color palettes, and visual settings as re
 
 Ghostty Wall can generate a darkened wallpaper-derived background, tinted text, cursor, selection, and ANSI colors with readable contrast, preview changes before applying them, switch between profiles, and return to previous environments. Monochrome images use black/white text when no image hue is available.
 
-**Linux:** stable  
-**macOS:** experimental  
-**Windows:** unsupported
+- **Linux x86_64:** stable; curl installer
+- **macOS:** experimental; no supported installer
+- **Windows:** unsupported
 
 Live draft reload on Linux remains [unverified](docs/probes/live-preview-linux.md#ticket-10-preflight-2026-09-27), including cancel restoration and window scope. Editor and sidebar samples are not live reload.
 
@@ -16,29 +16,26 @@ Live draft reload on Linux remains [unverified](docs/probes/live-preview-linux.m
 
 ## Install
 
-### Quick install
+The curl installer is currently the **only supported installation method**, for **Linux x86_64**. You need Ghostty, Bash, curl, tar and sha256sum. No Rust toolchain is needed.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/GiovanniCaiazzo01/Ghostty-wall/main/scripts/install-release.sh | bash
 ```
+
+The installer downloads the latest stable release, verifies its SHA-256 checksum and installs `~/.local/bin/ghostty-wall` by default. `INSTALL_PREFIX` selects a different prefix. Before initializing or updating, check which executable your shell selects:
+
+```bash
+command -v ghostty-wall
+ghostty-wall --version
+```
+
+An older Cargo or manual installation, such as `~/.cargo/bin/ghostty-wall`, can take precedence in PATH. The curl installer does not remove or upgrade copies in other directories. Put `~/.local/bin` before the old directory in your shell's PATH, then restart your shell; see [PATH conflict guidance](https://giovannicaiazzo01.github.io/Ghostty-wall/installation/#path-conflicts). You can check the new binary directly with `~/.local/bin/ghostty-wall --version` (adjust the path for a custom prefix). Your Profiles and History are unaffected.
 
 Then initialize Ghostty Wall:
 
 ```bash
 ghostty-wall init
 ```
-
-### Install with Cargo
-
-Requires Rust 1.88+:
-
-```bash
-cargo install --git https://github.com/GiovanniCaiazzo01/Ghostty-wall --locked
-```
-
-### Manual installation
-
-Prebuilt Linux binaries and SHA-256 checksums are available from [GitHub Releases](https://github.com/GiovanniCaiazzo01/Ghostty-wall/releases).
 
 ## Quick start
 
@@ -100,10 +97,9 @@ ghostty-wall plan welcome
 
 `plan PROFILE --json` outputs compact machine-readable JSON.
 
-Run `ghostty-wall update --check` to check the latest stable release without installing or changing user data. `ghostty-wall update` supports both release-installer and Cargo installations, including custom prefixes; it updates the executable being invoked, not another copy on PATH. Updates target Ghostty Wall, not Ghostty itself. They never run automatically or change Profiles, Sources, History, Environments, Durable Assets or Ghostty integration.
+Run `ghostty-wall update --check` to check the latest stable release without installing or changing user data. `ghostty-wall update` updates the curl-managed installation, including custom prefixes; it updates the executable being invoked, not another copy on PATH. Check the selected path as described under [Install](#install) if an older version still runs. Updates target Ghostty Wall, not Ghostty itself. They never run automatically or change Profiles, Sources, History, Environments, Durable Assets or Ghostty integration.
 
-- **Release/curl installer (Linux x86_64):** download the version-pinned official archive, verify SHA-256, validate its bounded archive layout/platform and executable version, then refresh the binary and `.ghostty-wall-release.sha256` together.
-- **Cargo (Linux/macOS, including platforms without prebuilt artifacts):** verify the installation's `.crates.toml` and `.crates2.json`, run `cargo install --git https://github.com/GiovanniCaiazzo01/Ghostty-wall --tag vVERSION --locked` in a disposable staging prefix, verify the resulting version and Cargo source metadata, then publish into the original prefix. This switches a local/path or registry installation to the official stable GitHub tag; other installed packages are preserved. Requires Cargo/Rust (minimum 1.88, or the selected release's newer requirement), a native linker, network access to GitHub/dependencies and sufficient temporary disk space. Builds may take several minutes. macOS remains experimental; native macOS and non-x86_64 updater execution have not been verified. No official prebuilt binary is implied for other architectures.
+The updater downloads the version-pinned official Linux x86_64 archive, verifies SHA-256, validates its bounded archive layout/platform and executable version, then refreshes the binary and `.ghostty-wall-release.sha256` together.
 
 Progress distinguishes checking, preparing, verifying and installing. Already-current versions are a no-op. Keep other installers idle during an update. Missing tools, read-only directories, unsupported atomic-exchange filesystems, inconsistent ownership, symlink substitutions and unowned/manual binaries fail without privilege escalation. Repair missing/mismatched ownership with the original installer rather than removing the safeguards. Failed preparation leaves the old installation untouched; failed publication rolls back executable and metadata. If rollback itself fails, the error identifies retained recovery files: inspect these and the installation before retrying. Publication is not a crash-atomic multi-file transaction; forced termination/power loss during installation may require recovery from `.ghostty-wall-update-*` files. Restart Ghostty Wall after replacement, especially an open TUI: an already-running process retains its original version. See `ghostty-wall update --help`.
 
@@ -213,7 +209,7 @@ Only one preparation runs at a time, with one replaceable pending selection; obs
 
 The Actions menu retains Source creation, duplicate/rename, Plan JSON, Previous, Doctor, updates, initialization/repair, migration and Uninstall. Profile actions remain full-screen, including direct import (`N`), Source-based creation (`m` or Enter on a Source), rename/duplicate (`r`/`d`), and immediate field edits (`f/c/t/w`, without applying). Input forms retain values on errors: Enter advances/submits the last field, Tab/Shift-Tab revisits fields, Ctrl-U clears, F1 shows full errors, and Esc/Ctrl-C/Ctrl-D cancels. Delete shows the exact removal summary with arrows to scroll; only `y` confirms, while Enter/n/Esc/Ctrl-C cancels. Maintenance, first-start initialization, image views and reports also stay full-screen. Reports (including Plan JSON, Settings and Source configuration) scroll with arrows/PageUp/PageDown; Enter/Esc returns. Source creation includes nested GitHub ref/subdirectory fields; Source administration supports add/inspect, not rename/remove. Initialization, repair, Welcome creation, Previous, migration, update installation and uninstall require explicit `y`; Enter/n/Esc/Ctrl-C/Ctrl-D declines. Uninstall preserves Intent/History and returns to the browser, where Initialize/Repair remains available. Long reports and maintenance run off the input thread. Esc can close a read-only job (work may finish in the background); another maintenance read-only job must wait for it to finish. Reports are capped at 4 MiB with truncation disclosed. After mutation starts, cancellation is unavailable until completion or recovery, and the screen says so. Update progress/errors use the same updater as the CLI; after replacement, restart Ghostty Wall—the running process still uses its original version. Run `ghostty-wall tui --help` for controls. `i` opens the original wallpaper image inside the interface via Ghostty's Kitty graphics protocol, with a text fallback elsewhere; it is not the Profile-opacity sample or a live reload. Non-terminal input retains the legacy line-based browser (`n` direct image import and `e` field edit, key then Enter).
 
-For local source builds use `cargo run --release --` (not an older installed `ghostty-wall`); release mode keeps image previews responsive. Full-screen TUI verification: `cargo build --locked && python3 -m unittest discover -s tests -p management_pty.py -v` (also `responsive_preview_pty.py` for blocked preparation/automatic graphics and `tui_pty.py` for advanced actions); tests isolate HOME and XDG_CONFIG_HOME and drive a real pseudo-terminal. PTY protocol assertions are not Ghostty visual proof.
+For contributor testing in a local checkout, use `cargo run --release --` (not an older installed `ghostty-wall`); release mode keeps image previews responsive. Full-screen TUI verification: `cargo build --locked && python3 -m unittest discover -s tests -p management_pty.py -v` (also `responsive_preview_pty.py` for blocked preparation/automatic graphics and `tui_pty.py` for advanced actions); tests isolate HOME and XDG_CONFIG_HOME and drive a real pseudo-terminal. PTY protocol assertions are not Ghostty visual proof.
 
 ## How it works
 
@@ -234,11 +230,11 @@ This means:
 
 Stable.
 
-Tagged releases currently provide a prebuilt `x86_64-unknown-linux-gnu` binary. Other Linux architectures can build from source.
+The curl installer uses the prebuilt `x86_64-unknown-linux-gnu` release. Other Linux architectures have no supported installer at this time.
 
 ### macOS
 
-Experimental while real-system verification is completed.
+Experimental code remains in the project, but there is no supported macOS installer at this time. The curl installer is Linux x86_64 only.
 
 See the [release checklist](docs/release-checklist.md) for current status.
 
