@@ -25,6 +25,9 @@ use crate::{
 
 mod delete;
 
+/// Initial wallpaper opacity for new Profiles only; never a decoding or resolution fallback.
+pub const NEW_PROFILE_WALLPAPER_OPACITY: f64 = 0.05;
+
 const MAX_IMAGE: u64 = 32 * 1024 * 1024;
 const MAX_INTENT: u64 = 1024 * 1024;
 
@@ -396,17 +399,22 @@ impl ProfileWorkflows {
         } else {
             format!("{}.{extension}", draft.id)
         };
+        let opacity = if draft.original.is_some() {
+            0.1 // Preserve the existing editor's initialization when adding a first wallpaper.
+        } else {
+            NEW_PROFILE_WALLPAPER_OPACITY
+        };
         let wallpaper = format!(
-            "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{basename}\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n{generation}\n[colors]\nmode = \"generated\"\n"
+            "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{basename}\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = {opacity}\n{generation}\n[colors]\nmode = \"generated\"\n"
         );
         let mut new: toml_edit::DocumentMut = wallpaper
             .parse()
             .map_err(|_| WorkflowError::Invalid("cannot construct wallpaper"))?;
+        let previous: toml_edit::DocumentMut = draft
+            .document
+            .parse()
+            .map_err(|_| WorkflowError::Invalid("invalid draft"))?;
         if draft.original.is_some() {
-            let previous: toml_edit::DocumentMut = draft
-                .document
-                .parse()
-                .map_err(|_| WorkflowError::Invalid("invalid draft"))?;
             if let Some(colors) = previous.get("colors") {
                 new["colors"] = colors.clone();
             } else {
@@ -423,9 +431,11 @@ impl ProfileWorkflows {
                     }
                 }
             }
-            if let Some(terminal) = previous.get("terminal") {
-                new["terminal"] = terminal.clone();
-            }
+        } else if let Some(opacity) = previous.get("wallpaper").and_then(|w| w.get("opacity")) {
+            new["wallpaper"]["opacity"] = opacity.clone();
+        }
+        if let Some(terminal) = previous.get("terminal") {
+            new["terminal"] = terminal.clone();
         }
         let document = new.to_string();
         parse_named_profile_toml(draft.id.as_str(), &self.config, &document)?;

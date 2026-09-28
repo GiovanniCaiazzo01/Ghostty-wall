@@ -64,9 +64,8 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
             || (key.code == KeyCode::Char('v') && !matches!(form.step, Step::Name)))
             && !form.status.is_empty()
         {
-            drop(screen);
-            management::details(output, &form.status)?;
-            screen = editor::Screen::open(output)?;
+            management::details(screen.terminal.backend_mut(), &form.status)?;
+            screen.redraw()?;
             continue;
         }
         if matches!(form.step, Step::Name) {
@@ -103,12 +102,10 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
                     form.step = Step::Review { generated: true };
                 }),
             Step::Wallpaper if key.code == KeyCode::Char('i') => {
-                drop(screen);
-                let stdin = io::stdin();
-                let chosen = pick_image_with(&paths, &mut stdin.lock().lines(), output, |path| {
+                let chosen = forms::image(screen.terminal.backend_mut(), &paths, |path| {
                     draft.import_image(&workflow, path)
                 })?;
-                screen = editor::Screen::open(output)?;
+                screen.redraw()?;
                 if chosen {
                     form.step = Step::Review { generated: false };
                 }
@@ -144,7 +141,6 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
                     ));
                 }
                 if key.code == KeyCode::Char('y') {
-                    drop(screen);
                     let outcome =
                         workflow.use_saved(&id, |id| Application::load(None)?.apply(id))?;
                     let report = match outcome {

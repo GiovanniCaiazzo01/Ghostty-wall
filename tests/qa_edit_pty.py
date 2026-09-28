@@ -84,12 +84,11 @@ class EditFixture(unittest.TestCase):
         return session
 
     def replace(self, session, path=None):
-        count = session.data.count(ALT_ENTER)
         session.send("\r")
         session.wait(b"Number/relative path")
         session.send(f"path:{path or self.original}\n")
-        session.wait(ALT_ENTER, count + 1)
         session.wait(b"Edit Profile boy")
+        self.assertNotIn(ALT_LEAVE, session.data)
 
     def save(self, session):
         session.send("s")
@@ -292,7 +291,8 @@ class EditPublicPath(EditFixture):
         session.wait(b"Cannot use")
         self.assertEqual(self.snapshot(), before)
         session.send("cancel\n")
-        session.wait(ALT_ENTER, 2)
+        session.wait(b"Edit Profile boy")
+        self.assertNotIn(ALT_LEAVE, session.data)
         session.send("\t\t")
         session.wait(b"15.125")
         session.send("\t")

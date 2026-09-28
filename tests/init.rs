@@ -122,7 +122,7 @@ fn init_creates_layout_default_intent_marker_and_hook() {
     assert!(
         fs::read_to_string(root.join("profiles/welcome.toml"))
             .unwrap()
-            .contains("opacity = 0.1")
+            .contains("opacity = 0.05")
     );
     assert_eq!(
         fs::read(root.join("profiles/welcome.png")).unwrap(),
@@ -472,6 +472,25 @@ fn repair_completes_pristine_interrupted_first_init_only() {
     fs::write(root.join(".init-in-progress"), b"").unwrap();
     assert!(init_repair(&damaged).is_err());
     assert!(!root.join("state.lock").exists());
+}
+
+#[test]
+fn old_and_new_bundled_profiles_survive_interrupted_init_without_rewriting() {
+    for opacity in ["0.1", "0.05"] {
+        let paths = test_paths(&format!("interrupted-opacity-{opacity}"));
+        let root = paths.managed_root();
+        fs::create_dir_all(root.join("profiles")).unwrap();
+        fs::write(root.join(".init-in-progress"), b"").unwrap();
+        let document = format!(
+            "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\nopacity = {opacity}\n\n[colors]\nmode = \"generated\"\n"
+        );
+        let profile = root.join("profiles/welcome.toml");
+        fs::write(&profile, &document).unwrap();
+        init_repair(&paths).unwrap();
+        assert_eq!(fs::read_to_string(&profile).unwrap(), document);
+        init(&paths).unwrap();
+        assert_eq!(fs::read_to_string(&profile).unwrap(), document);
+    }
 }
 
 #[test]

@@ -3,7 +3,7 @@
 use super::*;
 use crate::profile_workflow::ProfileWorkflows;
 
-const DELETE_HELP: &str = "Usage: ghostty-wall delete [PROFILE]\n\nOmit PROFILE to select one; [active] marks the latest Profile Activation.\nA supplied missing id is an error. Welcome cannot be deleted.\nConfirmation names the Profile and owned data eligible for removal.\nCancel is the default. Answer y then Enter to delete; Enter, n, cancel, or EOF cancels.\nNo --yes bypass is provided. The TUI Delete action uses this same flow.\n\nInactive deletion does not change Projection, History, or request reload.\nActive deletion commits existing Welcome before removing the Profile, under\none writer lock. Failed fallback/reconciliation retains the Profile.\nOlder installs without Welcome must make it available explicitly or apply\nanother Profile first. After History replay, apply a Profile before deleting.\nIf Intent, managed directories, or the current Activation changes while\nconfirming, start again.\n\nOnly the Profile file and proven-exclusive owned image are removed. Shared,\nreused, replaced, or ambiguous images remain; original user images, Sources, History,\nEnvironments, and Durable Assets are preserved for replay.\nRemoval isolates and verifies the captured file before unlinking it, so a\nreplacement at the public filename never inherits confirmation. A Profile\nfound again during removal or the renewed ownership check keeps its image;\ndeletion is incomplete and needs fresh confirmation. Committed Welcome\nfallback is not undone. Interrupted removal or failed restoration can retain\nfiles under .tmp-delete-<token>/ in the Managed Root; inspect the reported\npath before retrying. These files are not automatically restored or cleaned up.\nFallback can remain committed even if subsequent removal fails. Reload is\nbest-effort and reported separately, not proof of visible Ghostty change.\n";
+const DELETE_HELP: &str = "Usage: ghostty-wall delete [PROFILE]\n\nOmit PROFILE to select one; [active] marks the latest Profile Activation.\nA supplied missing id is an error. Welcome cannot be deleted.\nConfirmation names the Profile and owned data eligible for removal.\nCancel is the default. Answer y then Enter to delete; Enter, n, cancel, or EOF cancels.\nNo --yes bypass is provided. TUI Delete uses the same checks in a full-screen\nconfirmation: y confirms; Enter/n/Esc/Ctrl-C cancels, arrows scroll.\n\nInactive deletion does not change Projection, History, or request reload.\nActive deletion commits existing Welcome before removing the Profile, under\none writer lock. Failed fallback/reconciliation retains the Profile.\nOlder installs without Welcome must make it available explicitly or apply\nanother Profile first. After History replay, apply a Profile before deleting.\nIf Intent, managed directories, or the current Activation changes while\nconfirming, start again.\n\nOnly the Profile file and proven-exclusive owned image are removed. Shared,\nreused, replaced, or ambiguous images remain; original user images, Sources, History,\nEnvironments, and Durable Assets are preserved for replay.\nRemoval isolates and verifies the captured file before unlinking it, so a\nreplacement at the public filename never inherits confirmation. A Profile\nfound again during removal or the renewed ownership check keeps its image;\ndeletion is incomplete and needs fresh confirmation. Committed Welcome\nfallback is not undone. Interrupted removal or failed restoration can retain\nfiles under .tmp-delete-<token>/ in the Managed Root; inspect the reported\npath before retrying. These files are not automatically restored or cleaned up.\nFallback can remain committed even if subsequent removal fails. Reload is\nbest-effort and reported separately, not proof of visible Ghostty change.\n";
 
 pub(super) fn command(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
     let name = match args {
@@ -26,7 +26,6 @@ pub(super) fn flow(
     output: &mut impl Write,
 ) -> Result<(), CliError> {
     let paths = process_paths()?;
-    let workflow = ProfileWorkflows::load(paths.clone())?;
     let name = match name {
         Some(name) => name.to_owned(),
         None => {
@@ -35,21 +34,25 @@ pub(super) fn flow(
                 CliError::Intent(format!("Cannot select a Profile: {e}; no files changed"))
             })?;
             let active = history.latest().and_then(|a| a.profile_id());
-            writeln!(
+            presentation::heading(
                 output,
-                "Select Profile to delete (number or id; Enter cancels):"
+                "Select Profile to delete (number or id; Enter cancels):",
             )?;
+            writeln!(output)?;
             for (index, id) in profiles.iter().enumerate() {
-                writeln!(
+                presentation::line(
                     output,
-                    "  {}. {id}{}{}",
-                    index + 1,
-                    if active == Some(id) { " [active]" } else { "" },
-                    if id.as_str() == "welcome" {
-                        " (protected fallback)"
-                    } else {
-                        ""
-                    }
+                    presentation::Role::Choice,
+                    &format!(
+                        "  {}. {id}{}{}",
+                        index + 1,
+                        if active == Some(id) { " [active]" } else { "" },
+                        if id.as_str() == "welcome" {
+                            " (protected fallback)"
+                        } else {
+                            ""
+                        }
+                    ),
                 )?;
             }
             loop {
@@ -69,42 +72,81 @@ pub(super) fn flow(
                 if let Some(id) = selected {
                     break id.to_string();
                 }
-                writeln!(
+                presentation::error(
                     output,
-                    "Choose a listed Profile, or cancel; no files changed."
+                    "Choose a listed Profile, or cancel; no files changed.",
                 )?;
             }
         }
     };
-    let request = workflow.prepare_deletion(&name)?;
-    writeln!(output, "Delete Profile {}?", request.id)?;
-    writeln!(output, "Remove: profiles/{}.toml", request.id)?;
-    match request.image_path() {
-        Some(path) => writeln!(
+    let mut report = Vec::new();
+    with_confirmation(&name, &mut report, |summary| {
+        for (index, line) in summary.lines().enumerate() {
+            if index == 0 {
+                presentation::heading(output, line)?;
+            } else if line.starts_with("Warning:") {
+                presentation::line(output, presentation::Role::Warning, line)?;
+            } else {
+                writeln!(output, "{line}")?;
+            }
+        }
+        presentation::choices(
             output,
-            "Eligible owned image: {} (only if still proven exclusive).",
-            path.display()
-        )?,
-        None => writeln!(output, "Images retained: no proven-exclusive owned copy.")?,
+            "Confirm deletion:",
+            &["[y] Delete", "[n] Cancel (default)"],
+        )?;
+        let confirm = create_prompt(input, output, "Choice (y/n; default: n): ")?;
+        Ok(confirm
+            .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "y" | "yes" | "delete")))
+    })?;
+    for line in String::from_utf8_lossy(&report).lines() {
+        if line.starts_with("Profile ") && line.contains(" deleted.") {
+            presentation::line(output, presentation::Role::Success, line)?;
+        } else {
+            writeln!(output, "{line}")?;
+        }
     }
-    writeln!(
-        output,
-        "Preserve: original images, Sources, History, Environments, Durable Assets."
-    )?;
-    if request.active {
+    Ok(())
+}
+
+pub(super) fn with_confirmation(
+    name: &str,
+    output: &mut impl Write,
+    confirm: impl FnOnce(&str) -> Result<bool, CliError>,
+) -> Result<(), CliError> {
+    let workflow = ProfileWorkflows::load(process_paths()?)?;
+    let request = workflow.prepare_deletion(name)?;
+    let mut summary = Vec::new();
+    {
+        let output = &mut summary;
+        writeln!(output, "Delete Profile {}?", request.id)?;
+        writeln!(output, "Remove: profiles/{}.toml", request.id)?;
+        match request.image_path() {
+            Some(path) => writeln!(
+                output,
+                "Eligible owned image: {} (only if still proven exclusive).",
+                path.display()
+            )?,
+            None => writeln!(output, "Images retained: no proven-exclusive owned copy.")?,
+        }
         writeln!(
             output,
-            "Profile {} is active: apply Welcome durably before removal; reload is best-effort.",
-            request.id
+            "Preserve: original images, Sources, History, Environments, Durable Assets."
         )?;
-    } else {
-        writeln!(
-            output,
-            "Inactive Profile: terminal appearance and History unchanged."
-        )?;
+        if request.active {
+            writeln!(
+                output,
+                "Warning: Profile {} is active: apply Welcome durably before removal; reload is best-effort.",
+                request.id
+            )?;
+        } else {
+            writeln!(
+                output,
+                "Inactive Profile: terminal appearance and History unchanged."
+            )?;
+        }
     }
-    let confirm = create_prompt(input, output, "[y] Delete / [n] Cancel (default): ")?;
-    if !confirm.is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "y" | "yes" | "delete")) {
+    if !confirm(&String::from_utf8_lossy(&summary))? {
         return cancelled(output);
     }
     let outcome = workflow.confirm_deletion(

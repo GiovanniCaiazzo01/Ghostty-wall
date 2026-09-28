@@ -6,6 +6,34 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-28
+
+### Added
+
+- Automatic, asynchronous Profile previews with full-color Ghostty graphics, linear-light wallpaper compositing, matching colors and bounded background preparation; navigation and quit remain available while loading.
+- Full-screen Profile forms, image pickers, confirmations and scrollable reports, including discoverable full-path/error details for long picker entries.
+- Contained TUI maintenance and update progress, explicit mutation confirmation, and clear cancellation/restart boundaries.
+- Safe updates for Cargo installations alongside release-installer installations, including custom prefixes, staged official-tag builds, ownership verification and binary/metadata rollback.
+- Readable standalone CLI choices with explicit defaults, terminal-aware semantic colors, NO_COLOR support and wrapped labels; redirected output and JSON stay plain.
+
+### Changed
+
+- New image Profiles, including newly initialized Welcome, default to wallpaper opacity `0.05` instead of `0.1`. Existing Profiles, omitted settings, edits, duplicates, replay and terminal transparency are unchanged; explicit draft choices win.
+- The management browser requires 60×18 for simultaneous list/sample display; Create/Edit forms retain their separate 40×12 minimum.
+- README and documentation site describe the new preview, management, update and creation workflows.
+
+### Fixed
+
+- Obsolete preview results cannot replace the current selection; redraw/resize reuse prepared content while local inputs remain unchanged.
+- Archive expansion limits now cover tar headers and extension records before parsing, not just extracted file payloads.
+
+### Compatibility and limitations
+
+- No persisted-format migration or seed-algorithm change. Existing version 1/2 Profiles and History remain readable; back up the complete Managed Root before downgrading.
+- Linux is supported; macOS remains experimental. Native macOS and non-x86_64 updater execution have not been verified; prebuilt artifacts remain Linux x86_64 only.
+- Samples are approximate and read-only, not live Ghostty reload. Native blending, Display P3, effective user configuration, fonts, blur and desktop transparency can differ. Unsupported terminals show a labelled color-cell fallback.
+- Updates concern Ghostty Wall, not Ghostty. Keep other installers idle and restart after replacement. Binary/metadata publication supports rollback but is not crash-atomic; forced termination or power loss may require recovery from retained files.
+
 ## [1.1.0]
 
 ### Added

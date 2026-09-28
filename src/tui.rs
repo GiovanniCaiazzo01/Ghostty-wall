@@ -22,6 +22,7 @@ pub(crate) const ACTIONS: &[(char, &str)] = &[
     ('x', "Delete Profile (confirm)"),
     ('a', "Use selected Profile"),
     ('v', "View result / error details"),
+    ('i', "View original wallpaper image"),
     ('N', "Advanced: new image Profile"),
     ('m', "New Profile from Source"),
     ('o', "Add Source"),
@@ -33,16 +34,16 @@ pub(crate) const ACTIONS: &[(char, &str)] = &[
     ('d', "Duplicate Profile"),
     ('l', "List Profiles"),
     ('h', "Show History"),
-    ('s', "Show Settings"),
+    ('s', "Show Settings / Source configuration"),
     ('P', "Show selected Profile Plan JSON"),
     ('p', "Previous Environment (confirm)"),
     ('D', "Doctor"),
     ('u', "Check for updates"),
     ('U', "Install update (confirm)"),
-    ('I', "Initialize integration"),
+    ('I', "Initialize integration (confirm)"),
     ('y', "Preview initialization (dry-run)"),
-    ('R', "Repair integration"),
-    ('W', "Add welcome Profile"),
+    ('R', "Repair integration (confirm)"),
+    ('W', "Add welcome Profile (confirm)"),
     ('Y', "Preview legacy migration (dry-run)"),
     ('M', "Migrate legacy configuration (confirm)"),
     ('X', "Uninstall integration (confirm)"),
@@ -140,8 +141,61 @@ pub(crate) fn resize_notice(frame: &mut Frame) -> bool {
     true
 }
 
+pub(crate) fn management_needs_resize(width: u16, height: u16) -> bool {
+    width < 60 || height < 18
+}
+
+fn compact_item(text: &str, width: u16) -> ListItem<'static> {
+    let width = usize::from(width.max(1));
+    if text.chars().count() <= width {
+        return ListItem::new(text.to_owned());
+    }
+    ListItem::new(
+        text.chars()
+            .take(width - 1)
+            .chain(['…'])
+            .collect::<String>(),
+    )
+}
+
+pub(crate) fn preview_area(
+    area: ratatui::layout::Rect,
+    view: &View,
+) -> Option<ratatui::layout::Rect> {
+    if management_needs_resize(area.width, area.height) || view.menu.is_some() {
+        return None;
+    }
+    let wide = area.width >= 90 && area.height >= 18;
+    let areas = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(if wide { 5 } else { 3 }),
+    ])
+    .split(area);
+    if !wide && view.show_sample {
+        return Some(areas[1]);
+    }
+    Some(
+        Layout::horizontal([
+            if wide {
+                Constraint::Percentage(40)
+            } else {
+                Constraint::Length(20)
+            },
+            Constraint::Min(1),
+        ])
+        .split(areas[1])[1],
+    )
+}
+
 pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
-    if resize_notice(frame) {
+    if management_needs_resize(frame.area().width, frame.area().height) {
+        frame.render_widget(
+            Paragraph::new("Resize management to 60x18.\nEsc/Ctrl-C cancels.\nCreate/Edit forms still support 40x12.")
+                .style(Style::default().fg(Color::White).bg(Color::Black))
+                .wrap(Wrap { trim: false }),
+            frame.area(),
+        );
         return;
     }
     frame.render_widget(
@@ -151,19 +205,31 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
     let wide = frame.area().width >= 90 && frame.area().height >= 18;
     let compact_sample = !wide && view.show_sample && view.menu.is_none();
     let areas = Layout::vertical([
-        Constraint::Length(if compact_sample { 1 } else { 2 }),
+        Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(if compact_sample { 2 } else { 5 }),
+        Constraint::Length(if wide { 5 } else { 3 }),
     ])
     .split(frame.area());
-    frame.render_widget(
-        Paragraph::new(if compact_sample {
-            "Internal; NOT live Ghostty reload"
-        } else {
-            "Ghostty Wall · Profiles\nInternal preview; NOT live Ghostty reload"
-        }),
-        areas[0],
+    let selected = format!(
+        "Preview: {}",
+        browser.selected_profile().map_or("none", IntentId::as_str)
     );
+    let characters: Vec<_> = selected.chars().collect();
+    let mut heading: Vec<String> = characters
+        .chunks(usize::from(areas[0].width.max(1)))
+        .map(|line| line.iter().collect())
+        .collect();
+    if heading.len() == 1 {
+        heading.push(
+            if wide {
+                "Internal preview; NOT live Ghostty reload"
+            } else {
+                "Static preview (not live)"
+            }
+            .into(),
+        );
+    }
+    frame.render_widget(Paragraph::new(heading.join("\n")), areas[0]);
     if let Some(index) = view.menu {
         let list = List::new(ACTIONS.iter().map(|(key, name)| {
             wrapped_item(&format!("{key}  {name}"), areas[1].width.saturating_sub(4))
@@ -177,8 +243,15 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
             &mut ListState::default().with_selected(Some(index)),
         );
     } else {
-        let panes = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-            .split(areas[1]);
+        let panes = Layout::horizontal([
+            if wide {
+                Constraint::Percentage(40)
+            } else {
+                Constraint::Length(20)
+            },
+            Constraint::Min(1),
+        ])
+        .split(areas[1]);
         if wide || !view.show_sample {
             let (title, items, selected) = if browser.focus() == BrowserFocus::Profiles {
                 ("Profiles", browser.profiles(), browser.selected_profile())
@@ -189,19 +262,20 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
                     browser.selected_source(),
                 )
             };
-            let area = if wide { panes[0] } else { areas[1] };
+            let area = panes[0];
             let list = List::new(items.iter().map(|id| {
-                wrapped_item(
-                    &format!(
-                        "{id}{}",
-                        if title == "Profiles" && view.active.as_ref() == Some(id) {
-                            " [active]"
-                        } else {
-                            ""
-                        }
-                    ),
-                    area.width.saturating_sub(4),
-                )
+                let active = title == "Profiles" && view.active.as_ref() == Some(id);
+                if wide {
+                    wrapped_item(
+                        &format!("{id}{}", if active { " [active]" } else { "" }),
+                        area.width.saturating_sub(4),
+                    )
+                } else {
+                    compact_item(
+                        &format!("{}{id}", if active { "* " } else { "" }),
+                        area.width.saturating_sub(4),
+                    )
+                }
             }))
             .block(Block::default().title(title).borders(Borders::ALL))
             .highlight_symbol("> ")
@@ -213,8 +287,8 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
                     .with_selected(items.iter().position(|id| Some(id) == selected)),
             );
         }
-        if wide || view.show_sample {
-            let area = if wide { panes[1] } else { areas[1] };
+        {
+            let area = if compact_sample { areas[1] } else { panes[1] };
             if let Some(sample) = &view.sample {
                 sample.draw(frame, area);
             } else {
@@ -233,11 +307,15 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
         "↑↓ choose · Enter run · Esc back\nLetter shortcut · q via Esc then q"
     } else if compact_sample {
         "p list · n Create · e Edit\nx Delete · a Use · q quit"
+    } else if !wide {
+        "n Create · e Edit · x Delete · a Use\n↑↓ select · p preview · q quit"
     } else {
-        "n Create · e Edit · x Delete · a Use\n↑↓ select · p preview · Tab Sources\n? Actions · v details · q quit"
+        "n Create · e Edit · x Delete · a Use\n↑↓ auto · p preview · Tab Sources\n? Actions · v details · q quit"
     };
     let status = if view.status.is_empty() && !view.preview_error.is_empty() {
         "Preview unavailable; v details"
+    } else if view.status.is_empty() && !wide {
+        "? Actions · v details · Tab Sources · * active"
     } else {
         &view.status
     };
@@ -253,9 +331,56 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
+    fn management_minimum_preserves_photo_space_without_changing_form_minimum() {
+        let browser = TerminalBrowser::new(vec![], vec!["night".parse().unwrap()]);
+        for (width, height) in [(40, 12), (59, 18), (60, 17)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, &browser, &View::default()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("60x18"), "{width}x{height}: {text}");
+            assert!(text.contains("Esc/Ctrl-C"));
+        }
+        assert!(
+            !needs_resize(40, 12),
+            "Create/Edit minimum must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn compact_labels_are_elided_in_list_but_selected_name_remains_visible() {
+        let name = "a".repeat(64);
+        let browser =
+            TerminalBrowser::new(vec![name.parse().unwrap()], vec![name.parse().unwrap()]);
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &browser, &View::default()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("…"),
+            "compact lists should not wrap long identifiers"
+        );
+        assert!(text.contains(&format!("Preview: {name}")));
+    }
+
+    #[test]
     fn small_layout_keeps_actions_and_last_menu_entry_visible() {
         let browser = TerminalBrowser::new(vec![], vec!["night".parse().unwrap()]);
-        for (width, height) in [(40, 12), (60, 14), (120, 30)] {
+        for (width, height) in [(60, 18), (80, 20), (120, 30)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let mut view = View::default();
             terminal.draw(|frame| draw(frame, &browser, &view)).unwrap();
@@ -294,7 +419,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect::<String>();
-        assert!(notice.contains("Resize to 40x12"));
+        assert!(notice.contains("Resize management to 60x18"));
         assert!(notice.contains("Esc/Ctrl-C cancels"));
         assert!(matches!(
             input(KeyEvent::from(KeyCode::Down), BrowserMode::Browse),

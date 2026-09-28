@@ -36,6 +36,18 @@ def viewport(session):
     return "\n".join(line[:columns] for line in session.screen().decode().splitlines()[:rows])
 
 
+def wait_viewport(session, *labels, timeout=30):
+    deadline = time.monotonic() + timeout
+    while True:
+        frame = viewport(session)
+        if all(label in frame for label in labels):
+            return frame
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([session.master], [], [], remaining)[0]:
+            raise AssertionError(f"Missing current-frame labels {labels!r}: {frame!r}")
+        session.data.extend(os.read(session.master, 65536))
+
+
 def styled_cells(session):
     """Replay the cursor/SGR subset emitted by Ratatui, retaining sample RGB evidence."""
     cells, x, y, fg, bg = {}, 0, 0, None, None
@@ -153,10 +165,9 @@ class ManagementFixture(unittest.TestCase):
     def replace(self, session):
         session.send("\r")
         session.wait(b"Number/relative path")
-        count = session.data.count(ALT_ENTER)
         session.send(f"path:{self.original}\n")
-        session.wait(ALT_ENTER, count + 1)
         session.wait(b"Edit Profile amber")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
 
     def details(self, session, text):
         session.send("v")
@@ -164,14 +175,13 @@ class ManagementFixture(unittest.TestCase):
         session.send("\r")
 
     def menu_previous(self, session):
-        count = session.data.count(ALT_ENTER)
         session.send("?p")
-        session.wait(b"Type previous")
-        session.send("previous\n")
-        session.wait(b"Press Enter to return")
-        session.send("\n")
-        session.wait(ALT_ENTER, count + 1)
-        session.wait(b"n Create")
+        session.wait_screen(b"Cancel (default)")
+        session.send("y")
+        session.wait_screen(b"Completed")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
+        session.send("\r")
+        session.wait_screen(b"n Create")
 
 
 class ManagementPublicPath(ManagementFixture):
@@ -186,7 +196,13 @@ class ManagementPublicPath(ManagementFixture):
         sample_x, sample_y = next((x, y) for (x, y), value in cells.items() if value[0] == "$")
         colors = manifest["colors"]
         rgb = lambda value: tuple(bytes.fromhex(value))
-        blended = tuple((v + 255) // 2 for v in rgb(colors["background"]))
+        def blended_channel(value):
+            srgb = value / 255
+            linear = srgb / 12.92 if srgb <= 0.04045 else ((srgb + 0.055) / 1.055) ** 2.4
+            mixed = (linear + 1) / 2
+            return round((1.055 * mixed ** (1 / 2.4) - 0.055) * 255)
+
+        blended = tuple(blended_channel(v) for v in rgb(colors["background"]))
         self.assertEqual(cells[sample_x, sample_y], ("$", rgb(colors["foreground"]), blended))
         for i, color in enumerate(colors["palette"]):
             self.assertEqual(cells[sample_x + (i % 8) * 3, sample_y + 2 + i // 8][1], rgb(color), i)
@@ -290,19 +306,18 @@ class ManagementPublicPath(ManagementFixture):
         session = self.session()
         session.send("x")
         session.wait(b"Cancel (default)")
-        count = session.data.count(ALT_ENTER)
-        session.send("y\n")
-        session.wait(ALT_ENTER, count + 1)
+        session.send("y")
+        session.wait(b"n Create")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         self.details(session, b"Welcome fallback failed")
         self.assertEqual(self.snapshot(), before)
         session.send("ja")
         session.wait(b"other [active]")
         session.send("kx")
         session.wait(b"Cancel (default)")
-        count = session.data.count(ALT_ENTER)
-        session.send("y\n")
-        session.wait(ALT_ENTER, count + 1)
+        session.send("y")
         session.wait(b"n Create")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         self.assertFalse(self.profile.exists())
         self.assertFalse((self.root / "profiles/welcome.toml").exists())
         (self.root / "profiles/old.png").unlink()
@@ -333,10 +348,9 @@ class ManagementPublicPath(ManagementFixture):
         self.assertEqual(self.plan("newcomer")["environment"]["manifest"]["colors"]["background"], "123456")
         session.send("x")
         session.wait(b"Cancel (default)")
-        count = session.data.count(ALT_ENTER)
-        session.send("y\n")
-        session.wait(ALT_ENTER, count + 1)
+        session.send("y")
         session.wait(b"welcome [active]")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         self.assertFalse((self.root / "profiles/newcomer.toml").exists())
         self.assertEqual(self.original.read_bytes(), (ROOT / "tests/fixtures/palette.png").read_bytes())
         self.assertEqual(len(self.history()), 3)
@@ -431,13 +445,24 @@ class ManagementPublicPath(ManagementFixture):
         self.profile.rename(self.root / "profiles" / f"{long_id}.toml")
         before = self.snapshot()
         session = self.session()
-        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+        clears = session.data.count(b"\x1b[2J")
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
+        session.send("\x00")
+        session.wait(b"\x1b[2J", clears + 1)
+        frame = wait_viewport(session, "Selected text", "Cursor", "n Create", "a Use")
+        self.assertIn(f"Preview: {long_id}", "".join(frame.splitlines()[:2]))
+        self.assertIn("Profiles", frame)
+        self.assertNotIn("p list", frame)
+        self.assertEqual(self.snapshot(), before)
         session.send("p")
-        session.wait(b"p list")
-        for label in ["Selected text", "Cursor", "n Create", "a Use"]:
-            self.assertIn(label, viewport(session))
+        wait_viewport(session, "p list", "Selected text", "Cursor", "n Create", "a Use")
         session.send("pe\t\r")
         session.wait(b"Color samples")
+        clears = session.data.count(b"\x1b[2J")
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+        session.send("\x00")
+        session.wait(b"\x1b[2J", clears + 1)
+        wait_viewport(session, "Color samples", "h exact hex", "a Automatic", "Esc back")
         for label in ["h exact hex", "a Automatic", "Esc back"]:
             self.assertIn(label, viewport(session))
         session.send("h112233\r\t" + DOWN + "\r")
@@ -449,13 +474,20 @@ class ManagementPublicPath(ManagementFixture):
         for label in ["Back to editor", "Enter confirm", "n/Esc back"]:
             self.assertIn(label, viewport(session))
         session.send("nq")
-        session.wait(b"n Create")
+        wait_viewport(session, "Resize management to 60x18", "Esc/Ctrl-C cancels")
+        clears = session.data.count(b"\x1b[2J")
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 60, 0, 0))
+        session.send("\x00")
+        session.wait(b"\x1b[2J", clears + 1)
+        wait_viewport(session, "n Create")
         session.send("?\x1b[F")
         session.wait(b"Uninstall integration")
         self.assertIn("Uninstall integration", viewport(session))
         self.assertIn("Enter run", viewport(session))
         session.send("\x1b")
         session.wait(b"n Create")
+        self.assertEqual(session.data.count(ALT_ENTER), 1)
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         self.finish(session)
         self.assertEqual(self.snapshot(), before)
 
@@ -464,7 +496,7 @@ class ManagementPublicPath(ManagementFixture):
         session = self.session()
         fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 8, 30, 0, 0))
         session.send("nasy")
-        session.wait(b"Resize to 40x12")
+        wait_viewport(session, "Resize management to 60x18", "Esc/Ctrl-C cancels")
         self.assertEqual(self.snapshot(), before)
         self.assertIn("Esc/Ctrl-C cancels", viewport(session))
         session.send("\x1b")

@@ -13,7 +13,7 @@ A responsive, static documentation site for [Ghostty Wall](https://github.com/Gi
 
 ## Content sources
 
-Content follows `README.md`, `docs/user-guide.md`, and current CLI help: guided creation, visual editing, safe deletion, full-screen management, Sources, palettes, History and updates. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version and minimum Rust version come from `Cargo.toml`. Tests check links, key feature coverage and version agreement.
+Content follows `README.md` and current CLI help/source: guided creation, visual editing, safe deletion, automatic read-only Profile previews, contained full-screen forms/maintenance, Sources, palettes, History and safe release/curl and Cargo updates. The historically referenced `docs/user-guide.md` is absent in this checkout; do not treat it as an available content source. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version and minimum Rust version come from `Cargo.toml`. Tests check links, key feature coverage and version agreement.
 
 `dist/assets/mascot.png` and `dist/assets/welcome.png` are the project's existing images. The introduction terminal is an illustrative example, not a screenshot of CLI output; its palette strip is illustrative.
 

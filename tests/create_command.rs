@@ -149,6 +149,125 @@ fn assert_readable(plan: &Value) {
 }
 
 #[test]
+fn existing_opacity_survives_edit_duplicate_and_history_replay() {
+    let s = Sandbox::new();
+    fs::copy(fixture("white.png"), s.root().join("profiles/old.png")).unwrap();
+    for (id, opacity, expected) in [
+        ("explicit", "opacity = 0.37\n", serde_json::json!(370_000)),
+        ("transparent", "opacity = 0.0\n", serde_json::json!(0)),
+        ("omitted", "", Value::Null),
+    ] {
+        let path = s.root().join(format!("profiles/{id}.toml"));
+        fs::write(&path, format!(
+            "schema_version = 1\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"old.png\"\n{opacity}\n[terminal]\nbackground_opacity = 0.84\n"
+        )).unwrap();
+        let original = fs::read(&path).unwrap();
+        let original_plan = s.plan(id);
+        let manifest = &original_plan["environment"]["manifest"];
+        assert_eq!(manifest["wallpaper"]["opacity_millionths"], expected);
+        assert_eq!(
+            manifest["terminal"]["background_opacity_millionths"],
+            840_000
+        );
+        success(s.run(&["apply", id], ""));
+        let projection = fs::read(s.root().join("current.ghostty")).unwrap();
+        success(s.run(&["duplicate", id, &format!("{id}-copy")], ""));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(
+            s.plan(&format!("{id}-copy"))["environment"]["manifest"],
+            *manifest
+        );
+        success(s.run(&["edit", id, "terminal.font_size", "14"], ""));
+        let edited = s.plan(id);
+        let edited_bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            edited["environment"]["manifest"]["wallpaper"],
+            manifest["wallpaper"]
+        );
+        assert_eq!(
+            edited["environment"]["manifest"]["terminal"]["background_opacity_millionths"],
+            840_000
+        );
+        success(s.run(&["apply", id], ""));
+        success(s.run(&["previous"], ""));
+        assert_eq!(
+            fs::read(s.root().join("current.ghostty")).unwrap(),
+            projection
+        );
+        assert_eq!(s.plan(id)["environment"], edited["environment"]);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            edited_bytes,
+            "replay must not rewrite Profile {id}"
+        );
+    }
+    fs::write(
+        s.root().join("profiles/plain.toml"),
+        "schema_version = 1\n[wallpaper]\nmode = \"none\"\n[terminal]\nbackground_opacity = 0.84\n",
+    )
+    .unwrap();
+    success(s.run(&["edit", "plain", "terminal.font_size", "14"], ""));
+    success(s.run(&["duplicate", "plain", "plain-copy"], ""));
+    for id in ["plain", "plain-copy"] {
+        let plan = s.plan(id);
+        assert_eq!(plan["environment"]["manifest"]["wallpaper"]["mode"], "none");
+        assert!(plan["environment"]["manifest"]["wallpaper"]["opacity_millionths"].is_null());
+        assert_eq!(
+            plan["environment"]["manifest"]["terminal"]["background_opacity_millionths"],
+            840_000
+        );
+    }
+}
+
+#[test]
+fn direct_generated_and_source_creation_share_the_subdued_default() {
+    let s = Sandbox::new();
+    success(s.run(
+        &["new", "direct", fixture("white.png").to_str().unwrap()],
+        "",
+    ));
+    success(s.run(&["new", "gradient", "--generate", &"12".repeat(32)], ""));
+    success(s.run(
+        &[
+            "new",
+            "sourced",
+            "--source",
+            "welcome",
+            "--path",
+            "direct.png",
+        ],
+        "",
+    ));
+    success(s.run(&["create", "guided-gradient"], "g\ns\nn\n"));
+    for id in ["direct", "gradient", "sourced", "guided-gradient"] {
+        let plan = s.plan(id);
+        assert_eq!(
+            plan["environment"]["manifest"]["wallpaper"]["opacity_millionths"], 50_000,
+            "{id}"
+        );
+        assert!(
+            plan["environment"]["manifest"]["terminal"]["background_opacity_millionths"].is_null(),
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn guided_creation_subdues_wallpaper_without_setting_terminal_transparency() {
+    let s = Sandbox::new();
+    let help = success(s.run(&["create", "--help"], ""));
+    assert!(help.contains("wallpaper opacity is 0.05"));
+    assert!(help.contains("not terminal background opacity"));
+    success(s.run(&["create", "subdued"], &s.import_input("n\n")));
+    let plan = s.plan("subdued");
+    assert_eq!(
+        plan["environment"]["manifest"]["wallpaper"]["opacity_millionths"],
+        50_000
+    );
+    assert!(plan["environment"]["manifest"]["terminal"]["background_opacity_millionths"].is_null());
+}
+
+#[test]
 fn missing_id_retries_locally_and_saves_a_complete_profile_without_activation() {
     let s = Sandbox::new();
     success(s.run(&["apply", "welcome"], ""));
@@ -163,7 +282,7 @@ fn missing_id_retries_locally_and_saves_a_complete_profile_without_activation() 
     assert!(output.contains("lowercase"));
     assert!(output.contains("collision"));
     assert_eq!(output.matches("Create Profile mine.").count(), 1);
-    assert!(output.contains("[y] Use now / [n] Not now"));
+    assert!(output.contains("  [y] Use now\n  [n] Not now (default)\n"));
     assert!(output.contains("terminal unchanged"));
     assert!(!output.contains("Usage:"));
     let mut after = snapshot(&s.root());

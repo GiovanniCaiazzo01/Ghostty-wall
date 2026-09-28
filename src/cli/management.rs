@@ -1,6 +1,7 @@
 //! Full-screen orchestration over the same creation, editing, deletion and apply workflows.
 
 use super::*;
+mod preview;
 use crate::{domain::WallpaperSelection, tui::sample::Sample};
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -23,14 +24,52 @@ pub(super) fn run(
     screen
         .terminal
         .draw(|frame| tui::draw(frame, browser, &view))?;
-    refresh(application, browser, &mut view, seed);
+    refresh_active(application, &mut view);
+    let mut previews = preview::Previews::new(seed)?;
+    let size = screen.terminal.size()?;
+    previews.area = tui::preview_area(
+        ratatui::layout::Rect::new(0, 0, size.width, size.height),
+        &view,
+    )
+    .unwrap_or_default();
+    refresh(application, browser, &mut view, &mut previews);
+    let graphics = TerminalGraphics::from_environment() == TerminalGraphics::Ghostty;
+    let mut image_shown = false;
     loop {
+        let size = screen.terminal.size()?;
+        let area = tui::preview_area(
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+            &view,
+        );
+        if let Some(area) = area
+            && previews.area != area
+        {
+            previews.resize(browser, &mut view, area);
+        }
+        let completed = previews.poll(&mut view);
+        if image_shown && (completed || view.sample.is_none() || area.is_none()) {
+            clear_image(screen.terminal.backend_mut())?;
+            image_shown = false;
+        }
         screen
             .terminal
             .draw(|frame| tui::draw(frame, browser, &view))?;
-        let key = editor::key()?;
+        if graphics
+            && !image_shown
+            && let (Some(sample), Some(area)) = (&view.sample, area)
+        {
+            image_shown = sample.render_graphics(screen.terminal.backend_mut(), area)?;
+        }
+        if !event::poll(std::time::Duration::from_millis(16))? {
+            continue;
+        }
+        let key = match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => key,
+            Event::Resize(_, _) => crossterm::event::KeyEvent::from(KeyCode::Null),
+            _ => continue,
+        };
         let size = screen.terminal.size()?;
-        if tui::needs_resize(size.width, size.height) {
+        if tui::management_needs_resize(size.width, size.height) {
             if editor::interrupt(key) || key.code == KeyCode::Esc {
                 break;
             }
@@ -47,6 +86,10 @@ pub(super) fn run(
             }
             choice => choice,
         };
+        if matches!(choice, Input::Command(_)) && image_shown {
+            clear_image(screen.terminal.backend_mut())?;
+            image_shown = false;
+        }
         match choice {
             Input::Action(BrowserAction::Cancel) => break,
             Input::Action(BrowserAction::Back) => view.show_sample = false,
@@ -55,14 +98,7 @@ pub(super) fn run(
                 let selected = browser.selected_profile().cloned();
                 browser.dispatch(action, application)?;
                 if browser.selected_profile() != selected.as_ref() {
-                    view.sample = None;
-                    view.preview_error = "Resolving selected Profile...".into();
-                    screen
-                        .terminal
-                        .draw(|frame| tui::draw(frame, browser, &view))?;
-                    refresh(application, browser, &mut view, seed);
-                } else {
-                    refresh_active(application, &mut view);
+                    refresh(application, browser, &mut view, &mut previews);
                 }
             }
             Input::Command('?') => view.menu = Some(0),
@@ -72,7 +108,10 @@ pub(super) fn run(
                     .ok_or_else(|| {
                         CliError::Input("Select a Profile to Use; no files changed.".into())
                     })
-                    .and_then(|id| application.apply(id));
+                    .and_then(|id| {
+                        preview::set_seed(application, id, previews.seed)?;
+                        application.apply(id)
+                    });
                 view.status = match result {
                     Ok(outcome) => format!(
                         "Profile applied. Ghostty reload: {}.\nActivated {}.",
@@ -86,100 +125,132 @@ pub(super) fn run(
                 refresh_active(application, &mut view);
             }
             Input::Command('v') => {
-                drop(screen);
-                details(output, &format!("{}\n{}", view.status, view.preview_error))?;
-                screen = editor::Screen::open(output)?;
+                details(
+                    screen.terminal.backend_mut(),
+                    &format!(
+                        "{}\n{}\n{}",
+                        view.status,
+                        view.preview_error,
+                        view.sample
+                            .as_ref()
+                            .map(Sample::guidance)
+                            .unwrap_or_default()
+                    ),
+                )?;
+                screen.redraw()?;
             }
-            Input::Command(command) => {
-                let selected = browser.selected_profile().cloned();
-                drop(screen);
-                let mut target = selected.clone();
+            Input::Command(
+                command @ ('n' | 'N' | 'm' | 'e' | 'r' | 'd' | 'x' | 'f' | 'c' | 't' | 'w'),
+            ) => {
+                let mut target = browser.selected_profile().cloned();
                 let result = match command {
-                    'n' => create_tui::flow(output).map(|(id, report)| {
-                        if id.is_some() {
-                            target = id;
-                        }
-                        report
-                    }),
-                    'e' => selected
+                    'n' => create_tui::flow(screen.terminal.backend_mut()),
+                    'e' => target
                         .as_ref()
                         .ok_or_else(|| {
                             CliError::Input("Select a Profile to Edit; no files changed.".into())
                         })
-                        .and_then(|id| editor::flow(&[id.to_string()], output, true)),
-                    'i' => (|| {
-                        if browser.focus() == BrowserFocus::Sources {
-                            browser.dispatch(BrowserAction::NextPane, application)?;
-                        }
-                        browser.dispatch(BrowserAction::Preview, application)?;
-                        browser
-                            .render_preview_image(output, TerminalGraphics::from_environment())?;
-                        let stdin = io::stdin();
-                        prompt_tui(&mut stdin.lock().lines(), output, "Press Enter to return: ")?;
-                        Ok("Image preview closed; not a Ghostty reload.".into())
-                    })(),
-                    _ => (|| {
-                        let stdin = io::stdin();
-                        let mut lines = stdin.lock().lines();
-                        let result = tui_command(
-                            &command.to_string(),
-                            &mut lines,
-                            output,
-                            application,
-                            browser,
-                            seed,
-                            false,
-                        );
-                        target = browser.selected_profile().cloned();
-                        if matches!(
-                            command,
-                            'h' | 's'
-                                | 'l'
-                                | 'P'
-                                | 'p'
-                                | 'D'
-                                | 'u'
-                                | 'U'
-                                | 'I'
-                                | 'y'
-                                | 'R'
-                                | 'W'
-                                | 'Y'
-                                | 'M'
-                                | 'X'
-                        ) {
-                            if let Err(e) = &result {
-                                writeln!(output, "{e}")?;
-                            }
-                            prompt_tui(&mut lines, output, "Press Enter to return: ")?;
-                        }
-                        result.map(|()| "Ready; selection does not activate.".into())
-                    })(),
+                        .and_then(|id| {
+                            editor::flow(&[id.to_string()], screen.terminal.backend_mut(), true)
+                                .map(|report| (Some(id.clone()), report))
+                        }),
+                    _ => profile_forms::run(command, screen.terminal.backend_mut(), browser),
                 };
-                view.status = result.unwrap_or_else(|e| e.to_string());
-                if browser.mode() == BrowserMode::Cancelled {
-                    return write_text(output, "Cancelled.\n");
-                }
-                // Even a failed apply can follow a successful save. Reload the list rather
-                // than hiding the saved Profile, and derive the marker only from History.
+                view.status = match result {
+                    Ok((id, report)) => {
+                        if id.is_some() {
+                            target = id;
+                        }
+                        report
+                    }
+                    Err(e) => e.to_string(),
+                };
                 reload_list(application, browser, seed, target.as_ref())?;
-                if command == 'o' {
-                    browser.dispatch(BrowserAction::NextPane, application)?;
-                }
-                view.sample = None;
-                view.preview_error = "Resolving selected Profile...".into();
                 refresh_active(application, &mut view);
-                screen = editor::Screen::open(output)?;
-                screen
-                    .terminal
-                    .draw(|frame| tui::draw(frame, browser, &view))?;
-                refresh(application, browser, &mut view, seed);
+                refresh(application, browser, &mut view, &mut previews);
+                screen.redraw()?;
             }
-            Input::Ignore => (),
+            Input::Command(
+                command @ ('l' | 'h' | 's' | 'P' | 'D' | 'p' | 'u' | 'U' | 'X' | 'I' | 'R' | 'W'
+                | 'M' | 'y' | 'Y'),
+            ) => {
+                let result = maintenance::report(
+                    command,
+                    screen.terminal.backend_mut(),
+                    browser.selected_profile().cloned(),
+                    Some(previews.seed),
+                );
+                view.status = match result {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let report = format!("Maintenance failed: {error}");
+                        details(screen.terminal.backend_mut(), &report)?;
+                        report
+                    }
+                };
+                if matches!(command, 'p' | 'X' | 'I' | 'R' | 'W' | 'M') {
+                    let selected = browser.selected_profile().cloned();
+                    if let Err(error) = reload_list(application, browser, seed, selected.as_ref()) {
+                        view.status.push_str(&format!(
+                            "\nRefresh failed: {error}. Inspect Settings/Doctor before retrying."
+                        ));
+                    }
+                    refresh_active(application, &mut view);
+                    refresh(application, browser, &mut view, &mut previews);
+                }
+                screen.redraw()?;
+            }
+            Input::Command('o') => {
+                view.status = maintenance::source(screen.terminal.backend_mut())
+                    .unwrap_or_else(|error| error.to_string());
+                let selected = browser.selected_profile().cloned();
+                if let Err(error) = reload_list(application, browser, seed, selected.as_ref()) {
+                    view.status.push_str(&format!("\nRefresh failed: {error}"));
+                }
+                browser.dispatch(BrowserAction::NextPane, application)?;
+                refresh(application, browser, &mut view, &mut previews);
+                screen.redraw()?;
+            }
+            Input::Command('i') => {
+                let result = maintenance::image(
+                    screen.terminal.backend_mut(),
+                    browser.selected_profile().cloned(),
+                    Some(previews.seed),
+                );
+                view.status = match result {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let report = format!("Image preview failed: {error}");
+                        details(screen.terminal.backend_mut(), &report)?;
+                        report
+                    }
+                };
+                screen.redraw()?;
+            }
+            Input::Ignore | Input::Command(_) => (),
         }
+    }
+    if graphics {
+        clear_image(screen.terminal.backend_mut())?;
     }
     drop(screen);
     write_text(output, "Cancelled.\n")
+}
+
+pub(super) fn preview_application(
+    id: &IntentId,
+    seed: Option<ResolutionSeed>,
+) -> Result<Application, CliError> {
+    let mut application = Application::load(None)?;
+    if let Some(seed) = seed {
+        preview::set_seed(&mut application, id, seed)?;
+    }
+    Ok(application)
+}
+
+fn clear_image(output: &mut impl Write) -> io::Result<()> {
+    output.write_all(b"\x1b_Ga=d,d=I,i=42,q=2;\x1b\\")?;
+    output.flush()
 }
 
 fn reload_list(
@@ -210,55 +281,12 @@ fn reload_list(
 }
 
 fn refresh(
-    application: &mut Application,
+    _application: &mut Application,
     browser: &TerminalBrowser,
     view: &mut tui::View,
-    seed: Option<ResolutionSeed>,
+    previews: &mut preview::Previews,
 ) {
-    refresh_active(application, view);
-    let sample = (|| {
-        let id = browser
-            .selected_profile()
-            .ok_or_else(|| CliError::Input("No Profiles; choose Create.".into()))?;
-        // Random Profiles get a session selection without requiring a remembered CLI flag.
-        // Use reuses this seed; nonrandom Profiles must not receive one.
-        let intent = application.load_profile(id)?;
-        application.seed = if matches!(
-            intent.wallpaper,
-            Some(WallpaperIntent::Source {
-                selection: WallpaperSelection::Random,
-                ..
-            })
-        ) {
-            Some(match seed {
-                Some(seed) => seed,
-                None => ResolutionSeed::from_str(&editor::random_seed()?.to_string())?,
-            })
-        } else {
-            None
-        };
-        let plan = application.plan_intent(id, &intent)?;
-        let image = if uses_github_plan(&plan) {
-            planned_github_asset_bytes(&plan, &application.github)
-        } else {
-            planned_local_asset_bytes(&plan)
-        }
-        .map_err(CliError::Plan)?;
-        let manifest =
-            crate::codec::manifest::decode(&serde_json::to_vec(&plan["environment"]["manifest"])?)
-                .map_err(|e| CliError::Intent(e.to_string()))?;
-        Ok::<_, CliError>(Sample::new(manifest, image.as_deref()))
-    })();
-    match sample {
-        Ok(sample) => {
-            view.sample = Some(sample);
-            view.preview_error.clear();
-        }
-        Err(e) => {
-            view.sample = None;
-            view.preview_error = e.to_string();
-        }
-    }
+    previews.request(browser, view);
 }
 
 fn refresh_active(application: &Application, view: &mut tui::View) {

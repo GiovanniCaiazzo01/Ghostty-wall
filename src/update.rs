@@ -1,4 +1,8 @@
-//! Explicit, release-owned executable updates; never touches the Managed Root.
+//! Explicit, ownership-checked executable updates; never touches the Managed Root.
+
+mod cargo_install;
+#[cfg(unix)]
+mod publication;
 
 use std::{
     env, fs,
@@ -11,7 +15,7 @@ use flate2::read::GzDecoder;
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 use thiserror::Error;
 
 const REPOSITORY: &str = "GiovanniCaiazzo01/Ghostty-wall";
@@ -24,7 +28,7 @@ const MAX_UNPACKED: u64 = 256 * 1024 * 1024;
 pub enum UpdateError {
     /// No official prebuilt artifact exists for this platform.
     #[error(
-        "Automatic updates are not available for this platform.\nCurrent official prebuilt releases support Linux x86_64. Use the installation method appropriate for your platform."
+        "Automatic updates require Linux or macOS. Official prebuilt releases support Linux x86_64; Cargo installations on other supported architectures build from source."
     )]
     Unsupported,
     /// GitHub could not provide release metadata or bytes.
@@ -39,9 +43,9 @@ pub enum UpdateError {
     /// Verified archive did not meet the binary layout contract.
     #[error("Invalid Ghostty Wall release archive: {0}")]
     Archive(String),
-    /// Executable is not known to be owned by the release installer.
+    /// Neither release nor Cargo ownership could be established safely.
     #[error(
-        "Cannot update {0}: release installer ownership could not be verified. Reinstall using the release installer to enable self-updates; Cargo and manual installations should use their original installation method."
+        "Cannot update {0}: installation ownership could not be verified. Expected a matching release checksum or consistent Cargo .crates.toml and .crates2.json beside bin/. Repair missing/mismatched metadata using the original installer; manual binaries are not overwritten."
     )]
     Ownership(String),
     /// Executable replacement failed without intentionally escalating privilege.
@@ -49,11 +53,12 @@ pub enum UpdateError {
         "Cannot update {0}: {1}. Reinstall Ghostty Wall using the installation method that owns this binary."
     )]
     Replace(String, #[source] io::Error),
-    /// Binary was replaced but the companion ownership proof failed to publish.
-    #[error(
-        "Updated {0}, but could not refresh release ownership marker: {1}. Reinstall using the release installer before the next update."
-    )]
-    Marker(String, #[source] io::Error),
+    /// A source build could not be prepared; the live installation is unchanged.
+    #[error("Preparing source update failed: {0}")]
+    Build(String),
+    /// Publication and rollback both failed; original files are retained for recovery.
+    #[error("Update needs manual recovery: {0}")]
+    Recovery(String),
     /// Output could not be written.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -66,7 +71,7 @@ struct Release {
 
 /// Checks or installs the latest official stable GitHub Release, only when invoked explicitly.
 pub fn run(check: bool, output: &mut impl Write) -> Result<(), UpdateError> {
-    if !check && !supported(env::consts::OS, env::consts::ARCH) {
+    if !check && !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Err(UpdateError::Unsupported);
     }
     let agent = ureq::Agent::config_builder()
@@ -146,8 +151,20 @@ fn run_with(
     installed: &str,
     exe: Option<&Path>,
     output: &mut impl Write,
-    mut get: impl FnMut(&str, u64) -> Result<Vec<u8>, UpdateError>,
+    get: impl FnMut(&str, u64) -> Result<Vec<u8>, UpdateError>,
 ) -> Result<(), UpdateError> {
+    run_with_builder(check, installed, exe, output, get, cargo_install::build)
+}
+
+fn run_with_builder(
+    check: bool,
+    installed: &str,
+    exe: Option<&Path>,
+    output: &mut impl Write,
+    mut get: impl FnMut(&str, u64) -> Result<Vec<u8>, UpdateError>,
+    build: impl FnOnce(&str, &Path) -> Result<(), UpdateError>,
+) -> Result<(), UpdateError> {
+    writeln!(output, "Checking latest stable Ghostty Wall release...")?;
     let api = format!("https://api.github.com/repos/{REPOSITORY}/releases/latest");
     let metadata = get(&api, 64 * 1024)?;
     let release: Release = serde_json::from_slice(&metadata)
@@ -175,25 +192,136 @@ fn run_with(
         return Ok(());
     }
     let exe = exe.ok_or_else(|| UpdateError::Release("executable path unavailable".into()))?;
-    verify_ownership(exe)?;
+    install(exe, installed, &release.tag_name, output, &mut get, build)?;
+    writeln!(output, "\nUpdated Ghostty Wall {current} -> {latest}.")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn install(
+    exe: &Path,
+    installed: &str,
+    tag: &str,
+    output: &mut impl Write,
+    get: &mut impl FnMut(&str, u64) -> Result<Vec<u8>, UpdateError>,
+    build: impl FnOnce(&str, &Path) -> Result<(), UpdateError>,
+) -> Result<(), UpdateError> {
+    use publication::Snapshot;
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Err(UpdateError::Unsupported);
+    }
+    let ownership = |_| UpdateError::Ownership(exe.display().to_string());
+    let previous = Snapshot::capture(exe, MAX_UNPACKED).map_err(ownership)?;
+    let marker_path = exe.with_file_name(".ghostty-wall-release.sha256");
+    let root = exe
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| ownership(io::Error::other("missing prefix")))?;
+    let temporary = TempDir::new()?;
+    let temporary_root = temporary.path().canonicalize()?;
+    let mut changes = Vec::new();
+    let binary;
+    let _cargo_lock;
+    if fs::symlink_metadata(&marker_path).is_ok() {
+        _cargo_lock = None;
+        let marker = Snapshot::capture(&marker_path, 1024).map_err(ownership)?;
+        verify_checksum(&previous.bytes, &marker.bytes, "ghostty-wall")
+            .map_err(|_| ownership(io::Error::other("checksum")))?;
+        if root.join(".crates.toml").exists() || root.join(".crates2.json").exists() {
+            return Err(UpdateError::Ownership(
+                "ambiguous release and Cargo ownership".into(),
+            ));
+        }
+        if !supported(env::consts::OS, env::consts::ARCH) {
+            return Err(UpdateError::Unsupported);
+        }
+        writeln!(output, "Preparing release download {tag}...")?;
+        let base = format!("https://github.com/{REPOSITORY}/releases/download/{tag}/{ASSET}");
+        let archive = get(&base, MAX_ARCHIVE)?;
+        let checksum = get(&format!("{base}.sha256"), 1024)?;
+        writeln!(output, "Verifying SHA-256 and release archive...")?;
+        verify_checksum(&archive, &checksum, ASSET)?;
+        binary = extract_binary(&archive, &temporary_root)?;
+        let prepared = temporary_root.join("ghostty-wall");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&prepared, fs::Permissions::from_mode(0o755))?;
+        verify_executable(&prepared, &tag[1..])?;
+        changes.push((
+            marker,
+            format!("{}  ghostty-wall\n", sha256_hex(&binary)).into_bytes(),
+        ));
+    } else {
+        if exe.file_name().and_then(|s| s.to_str()) != Some("ghostty-wall")
+            || exe
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|s| s.to_str())
+                != Some("bin")
+        {
+            return Err(UpdateError::Ownership(exe.display().to_string()));
+        }
+        let toml =
+            Snapshot::capture(&root.join(".crates.toml"), 4 * 1024 * 1024).map_err(ownership)?;
+        _cargo_lock = Some(
+            toml.lock_exclusive()
+                .map_err(|e| UpdateError::Replace(exe.display().to_string(), e))?,
+        );
+        let json =
+            Snapshot::capture(&root.join(".crates2.json"), 4 * 1024 * 1024).map_err(ownership)?;
+        let record = cargo_install::Record::parse(&toml.bytes, &json.bytes, installed)?;
+        writeln!(
+            output,
+            "Preparing Cargo source build {tag} (requires Rust, native linker and network; this may take several minutes)..."
+        )?;
+        build(tag, &temporary_root)?;
+        writeln!(
+            output,
+            "Verifying source-build executable and Cargo metadata..."
+        )?;
+        let built_toml = Snapshot::capture(&temporary_root.join(".crates.toml"), 4 * 1024 * 1024)?;
+        let built_json = Snapshot::capture(&temporary_root.join(".crates2.json"), 4 * 1024 * 1024)?;
+        let built = cargo_install::Record::parse(&built_toml.bytes, &built_json.bytes, &tag[1..])?;
+        let (new_toml, new_json) = record.updated(built, tag)?;
+        let path = temporary_root.join("bin/ghostty-wall");
+        binary = Snapshot::capture(&path, MAX_UNPACKED)?.bytes;
+        verify_executable(&path, &tag[1..])?;
+        changes.push((toml, new_toml));
+        changes.push((json, new_json));
+    }
     writeln!(
         output,
-        "Current version: {current}\nLatest version:  {latest}\n"
+        "Installing {} and ownership metadata...",
+        exe.display()
     )?;
-    writeln!(output, "Downloading {}...", release.tag_name)?;
-    let base = format!(
-        "https://github.com/{REPOSITORY}/releases/download/{}/{ASSET}",
-        release.tag_name
-    );
-    let archive = get(&base, MAX_ARCHIVE)?;
-    let checksum = get(&format!("{base}.sha256"), 1024)?;
-    writeln!(output, "Verifying SHA-256...")?;
-    verify_checksum(&archive, &checksum, ASSET)?;
-    let temporary = TempDir::new().map_err(|e| UpdateError::Archive(e.to_string()))?;
-    let binary = extract_binary(&archive, temporary.path())?;
-    writeln!(output, "Updating {}...", exe.display())?;
-    replace_executable(exe, &binary)?;
-    writeln!(output, "\nUpdated Ghostty Wall {current} -> {latest}.")?;
+    changes.insert(0, (previous, binary));
+    publication::publish(exe, changes)
+}
+
+#[cfg(not(unix))]
+fn install(
+    _: &Path,
+    _: &str,
+    _: &str,
+    _: &mut impl Write,
+    _: &mut impl FnMut(&str, u64) -> Result<Vec<u8>, UpdateError>,
+    _: impl FnOnce(&str, &Path) -> Result<(), UpdateError>,
+) -> Result<(), UpdateError> {
+    Err(UpdateError::Unsupported)
+}
+
+fn verify_executable(path: &Path, version: &str) -> Result<(), UpdateError> {
+    let result = std::process::Command::new(path)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| UpdateError::Build(format!("prepared executable could not run: {e}")))?;
+    if !result.status.success()
+        || String::from_utf8_lossy(&result.stdout).trim() != format!("ghostty-wall {version}")
+    {
+        return Err(UpdateError::Build(
+            "prepared executable version does not match the requested release".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -224,8 +352,27 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+struct UnpackedArchive<R> {
+    reader: io::Take<R>,
+}
+
+impl<R: Read> Read for UnpackedArchive<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if !buffer.is_empty() && self.reader.limit() == 0 {
+            let mut excess = [0];
+            if self.reader.get_mut().read(&mut excess)? != 0 {
+                return Err(io::Error::other("archive too large"));
+            }
+            return Ok(0);
+        }
+        self.reader.read(buffer)
+    }
+}
+
 fn extract_binary(archive: &[u8], directory: &Path) -> Result<Vec<u8>, UpdateError> {
-    let decoder = GzDecoder::new(archive);
+    let decoder = UnpackedArchive {
+        reader: GzDecoder::new(archive).take(MAX_UNPACKED),
+    };
     let mut tar = tar::Archive::new(decoder);
     let mut found = None;
     let mut total = 0u64;
@@ -287,6 +434,8 @@ fn extract_binary(archive: &[u8], directory: &Path) -> Result<Vec<u8>, UpdateErr
             found = Some(bytes);
         }
     }
+    io::copy(&mut tar.into_inner(), &mut io::sink())
+        .map_err(|e| UpdateError::Archive(e.to_string()))?;
     let bytes =
         found.ok_or_else(|| UpdateError::Archive("missing executable ghostty-wall".into()))?;
     fs::write(directory.join("ghostty-wall"), &bytes)
@@ -294,6 +443,7 @@ fn extract_binary(archive: &[u8], directory: &Path) -> Result<Vec<u8>, UpdateErr
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn verify_ownership(exe: &Path) -> Result<(), UpdateError> {
     let ownership = || UpdateError::Ownership(exe.display().to_string());
     if !fs::symlink_metadata(exe)
@@ -309,57 +459,35 @@ fn verify_ownership(exe: &Path) -> Result<(), UpdateError> {
     verify_checksum(&binary, &checksum, "ghostty-wall").map_err(|_| ownership())
 }
 
-#[cfg(unix)]
-fn replace_executable(exe: &Path, binary: &[u8]) -> Result<(), UpdateError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let parent = exe
-        .parent()
-        .ok_or_else(|| UpdateError::Ownership(exe.display().to_string()))?;
-    let failure = |e| UpdateError::Replace(exe.display().to_string(), e);
-    let mut staged = NamedTempFile::new_in(parent).map_err(failure)?;
-    staged.write_all(binary).map_err(failure)?;
-    staged
-        .as_file()
-        .set_permissions(fs::Permissions::from_mode(0o755))
-        .map_err(failure)?;
-    staged.as_file().sync_all().map_err(failure)?;
-
-    let marker = exe.with_file_name(".ghostty-wall-release.sha256");
-    let mut proof = NamedTempFile::new_in(parent).map_err(failure)?;
-    writeln!(proof, "{}  ghostty-wall", sha256_hex(binary)).map_err(failure)?;
-    proof
-        .as_file()
-        .set_permissions(fs::Permissions::from_mode(0o644))
-        .map_err(failure)?;
-    proof.as_file().sync_all().map_err(failure)?;
-
-    staged.persist(exe).map_err(|e| failure(e.error))?;
-    proof
-        .persist(&marker)
-        .map_err(|e| UpdateError::Marker(exe.display().to_string(), e.error))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn replace_executable(_: &Path, _: &[u8]) -> Result<(), UpdateError> {
-    Err(UpdateError::Unsupported)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
     use tar::{Builder, EntryType, Header};
 
+    #[cfg(unix)]
+    include!("update/regression.rs");
+
     fn elf() -> Vec<u8> {
-        let mut bytes = vec![0; 20];
-        bytes[..4].copy_from_slice(b"\x7fELF");
-        bytes[4] = 2;
-        bytes[5] = 1;
-        bytes[18] = 62;
-        bytes.extend_from_slice(b"new");
-        bytes
+        static BINARY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        BINARY
+            .get_or_init(|| {
+                let dir = TempDir::new().unwrap();
+                let source = dir.path().join("release.rs");
+                fs::write(&source, "fn main() { println!(\"ghostty-wall 1.0.10\"); }").unwrap();
+                let binary = dir.path().join("ghostty-wall");
+                assert!(
+                    std::process::Command::new("rustc")
+                        .arg(&source)
+                        .arg("-o")
+                        .arg(&binary)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                fs::read(binary).unwrap()
+            })
+            .clone()
     }
 
     fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -397,6 +525,60 @@ mod tests {
     }
 
     #[test]
+    fn cargo_installation_updates_at_its_original_prefix() {
+        let dir = TempDir::new().unwrap();
+        let exe = dir.path().join("bin/ghostty-wall");
+        fs::create_dir(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, b"old").unwrap();
+        let key = "ghostty-wall 1.0.9 (git+https://github.com/GiovanniCaiazzo01/Ghostty-wall#abc)";
+        fs::write(
+            dir.path().join(".crates.toml"),
+            format!("[v1]\n{key:?} = [\"ghostty-wall\"]\n"),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".crates2.json"),
+            serde_json::to_vec(&serde_json::json!({"installs": {key: {"bins": ["ghostty-wall"]}}}))
+                .unwrap(),
+        )
+        .unwrap();
+        let result = run_with_builder(
+            false,
+            "1.0.9",
+            Some(&exe),
+            &mut Vec::new(),
+            |url, _| fixture_get(&[], &mut Vec::new(), url),
+            |_, _| Err(UpdateError::Network("controlled build failure".into())),
+        );
+        assert!(
+            matches!(result, Err(UpdateError::Network(ref text)) if text == "controlled build failure"),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(exe).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_verified_archive_with_unusable_executable() {
+        let dir = TempDir::new().unwrap();
+        let exe = dir.path().join("ghostty-wall");
+        fs::write(&exe, b"old").unwrap();
+        let marker = exe.with_file_name(".ghostty-wall-release.sha256");
+        fs::write(&marker, format!("{}  ghostty-wall\n", sha256_hex(b"old"))).unwrap();
+        let old_marker = fs::read(&marker).unwrap();
+        let mut fake = vec![0; 20];
+        fake[..6].copy_from_slice(b"\x7fELF\x02\x01");
+        fake[18] = 62;
+        let data = archive(&[("root/ghostty-wall", &fake)]);
+        let result = run_with(false, "1.0.9", Some(&exe), &mut Vec::new(), |url, _| {
+            fixture_get(&data, &mut Vec::new(), url)
+        });
+        assert!(result.is_err(), "unusable release was published");
+        assert_eq!(fs::read(&exe).unwrap(), b"old");
+        assert_eq!(fs::read(&marker).unwrap(), old_marker);
+    }
+
+    #[test]
     fn version_and_metadata() {
         assert!(version("v1.0.10").unwrap() > version("v1.0.9").unwrap());
         for tag in [
@@ -415,7 +597,7 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, UpdateError::Release(_)));
-        assert!(output.is_empty());
+        assert!(String::from_utf8_lossy(&output).contains("Checking"));
         assert!(matches!(
             run_with(true, "1.0.9", None, &mut output, |_, _| Ok(
                 br#"{"tag_name":"bad"}"#.to_vec()
@@ -428,7 +610,7 @@ mod tests {
             )),
             Err(UpdateError::Network(_))
         ));
-        assert!(output.is_empty());
+        assert!(!String::from_utf8_lossy(&output).contains("Installing"));
         assert!(supported("linux", "x86_64"));
         assert!(!supported("macos", "aarch64"));
         assert!(!supported("linux", "aarch64"));

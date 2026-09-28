@@ -12,9 +12,17 @@ use thiserror::Error;
 const OLD_DEFAULT_CONFIG: &str = "schema_version = 1\n\n[sources]\n";
 const DEFAULT_CONFIG: &str =
     "schema_version = 1\n\n[sources.welcome]\nkind = \"local-directory\"\npath = \"profiles\"\n";
+// Historical bundled bytes remain recognizable after interrupted initialization.
 const WELCOME_PROFILE: &str = "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n";
 const WELCOME_IMAGE: &[u8] = include_bytes!("../media/welcome.png");
 const HOOK_LINE: &str = "config-file = ?";
+
+fn default_welcome_profile() -> String {
+    let opacity = crate::profile_workflow::NEW_PROFILE_WALLPAPER_OPACITY;
+    format!(
+        "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\nfit = \"cover\"\nposition = \"center\"\nopacity = {opacity}\n\n[colors]\nmode = \"generated\"\n"
+    )
+}
 
 /// Inputs that choose platform paths. Tests inject these instead of env globals.
 #[derive(Clone, Debug)]
@@ -732,16 +740,19 @@ fn is_bundled_example_path(path: &Path) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
+    let profile = default_welcome_profile();
     let expected: &[u8] = match name.to_str() {
         Some("welcome.png") => WELCOME_IMAGE,
-        Some("welcome.toml") => WELCOME_PROFILE.as_bytes(),
+        Some("welcome.toml") => profile.as_bytes(),
         _ => return false,
     };
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
     validate_existing(path, &metadata, false).is_ok()
-        && fs::read(path).is_ok_and(|bytes| bytes == expected)
+        && fs::read(path).is_ok_and(|bytes| {
+            bytes == expected || (name == "welcome.toml" && bytes == WELCOME_PROFILE.as_bytes())
+        })
 }
 
 fn resume_first_init(
@@ -1251,7 +1262,7 @@ fn ensure_welcome(
     )?;
     ensure_file(
         &root.join("profiles/welcome.toml"),
-        WELCOME_PROFILE.as_bytes(),
+        default_welcome_profile().as_bytes(),
         mutations,
         created,
     )

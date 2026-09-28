@@ -36,6 +36,7 @@ use crate::{
         plan_local_profile_json, plan_local_profile_with_theme_json, planned_github_asset_bytes,
         planned_local_asset_bytes,
     },
+    profile_workflow::NEW_PROFILE_WALLPAPER_OPACITY,
     runtime::{ReloadAdapter, platform_reload_adapter},
     terminal_browser::{
         BrowserAction, BrowserApplication, BrowserFocus, BrowserMode, PlannedProfile,
@@ -49,7 +50,11 @@ use crate::{
 mod create_tui;
 mod delete;
 mod editor;
+mod forms;
+mod maintenance;
 mod management;
+mod presentation;
+mod profile_forms;
 
 const HELP: &str = concat!(
     "Ghostty Wall ",
@@ -77,13 +82,17 @@ const HELP: &str = concat!(
     "  ghostty-wall doctor\n",
     "  ghostty-wall tui [--seed HEX]       # Create/Edit/Delete/Use; ? Actions, --help\n",
     "  ghostty-wall uninstall\n",
-    "  ghostty-wall update [--check]\n",
-    "\nLive draft sessions are library-only; CLI/TUI previews do not reload Ghostty.\n",
+    "  ghostty-wall update [--check]  # release-installer or Cargo; --check is read-only\n",
+    "\nNew image Profiles start at wallpaper opacity 0.05; terminal transparency is unchanged.\n",
+    "Live draft sessions are library-only; CLI/TUI previews do not reload Ghostty.\n",
     "After an interrupted session, apply/previous restore from History before committing; doctor is read-only.\n"
 );
 const CREATE_HELP: &str = concat!(
     "Usage: ghostty-wall create [PROFILE]\n\n",
     "Create a complete Profile with a generated wallpaper or your own PNG/JPEG.\n",
+    "New wallpaper opacity is 0.05 (subdued image), not terminal background opacity.\n",
+    "Light themes may look lighter, not darker. Existing Profiles are unchanged.\n",
+    "After saving, edit PROFILE wallpaper.opacity VALUE to customize (0..1).\n",
     "Omit PROFILE to choose an id; supplied ids are not asked for again.\n",
     "Ids: 1..64 lowercase letters/digits with single internal hyphens. Existing ids are errors.\n\n",
     "Answer each prompt then press Enter. Type cancel (or send EOF) before Save\n",
@@ -100,6 +109,8 @@ const CREATE_HELP: &str = concat!(
     "After Save choose Use now or Not now (default). Use now commits an Activation\n",
     "via normal apply; reload is best-effort, not proof of visible Ghostty change.\n",
     "Not now keeps the Profile saved and leaves the terminal unchanged.\n",
+    "Choices are listed separately; defaults appear in the input question.\n",
+    "NO_COLOR disables inline styling; piped input/output stays plain.\n",
     "Run ghostty-wall init first. This command does not provide live draft preview.\n",
     "TUI: n opens the same workflow with an embedded form and approximate sample.\n"
 );
@@ -152,6 +163,12 @@ fn execute(
         [command, rest @ ..] if command == "tui" => command_tui(rest, output, input_errors),
         [command] if command == "uninstall" => command_uninstall(output),
         [command, rest @ ..] if command == "update" => {
+            if matches!(rest, [flag] if flag == "--help" || flag == "-h") {
+                return write_text(
+                    output,
+                    "Usage: ghostty-wall update [--check]\n\nExplicitly update Ghostty Wall, never Ghostty or Profile data.\n--check only checks the latest stable release; it never installs.\nRelease-installer binaries use verified Linux x86_64 release archives.\nCargo installations build the stable GitHub tag in temporary staging,\nthen update the invoked binary and Cargo metadata at the original prefix.\nSource builds require Cargo/Rust (1.88+), a native linker and network.\nLinux/macOS and atomic-exchange-capable writable install directories are\nrequired. Missing/mismatched ownership or substituted paths are rejected;\nmanual binaries are not overwritten. No privilege escalation.\nKeep other installers idle. Failed publication rolls back; if rollback\nalso fails, inspect the recovery paths in the error before retrying.\n",
+                );
+            }
             update::run(parse_update_options(rest)?, output).map_err(CliError::Update)
         }
         _ => Err(CliError::Usage("unknown command or option".into())),
@@ -269,26 +286,34 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
                 error @ (crate::profile_workflow::WorkflowError::Id(_)
                 | crate::profile_workflow::WorkflowError::Collision(_)),
             ) if supplied.is_none() => {
-                writeln!(
+                presentation::error(
                     output,
-                    "Invalid or existing Profile ID: {}. Try another; nothing saved.",
-                    CliError::from(error)
+                    &format!(
+                        "Invalid or existing Profile ID: {}. Try another; nothing saved.",
+                        CliError::from(error)
+                    ),
                 )?;
             }
             Err(error) => return Err(error.into()),
         }
     };
-    writeln!(
+    presentation::heading(output, &format!("Create Profile {}.", draft.id()))?;
+    presentation::line(
         output,
-        "Create Profile {}. Nothing is saved until you choose Save.",
-        draft.id()
+        presentation::Role::Warning,
+        "Nothing is saved until you choose Save.",
     )?;
     let generated = loop {
-        let Some(choice) = create_prompt(
-            &mut lines,
+        presentation::choices(
             output,
-            "Wallpaper: [g]enerate, [i]mage from Downloads/Pictures, or cancel: ",
-        )?
+            "Wallpaper:",
+            &[
+                "[g] Generate wallpaper",
+                "[i] Image from Downloads/Pictures",
+                "cancel  Discard draft",
+            ],
+        )?;
+        let Some(choice) = create_prompt(&mut lines, output, "Choice (g/i/cancel; no default): ")?
         else {
             return create_cancelled(output);
         };
@@ -303,7 +328,7 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
                 }
                 break false;
             }
-            _ => writeln!(output, "Choose g or i; nothing saved.")?,
+            _ => presentation::error(output, "Choose g or i; nothing saved.")?,
         }
     };
     let mut colors = draft.generated_colors()?;
@@ -316,9 +341,23 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
             colors.foreground()
         )?;
         let label = if generated {
-            "[s]ave, [a]nother generated variant (before save only), or cancel: "
+            presentation::choices(
+                output,
+                "Save draft:",
+                &[
+                    "[s]ave wallpaper and colors",
+                    "[a]nother generated variant (before save only)",
+                    "cancel  Discard draft",
+                ],
+            )?;
+            "Choice (s/a/cancel; no default): "
         } else {
-            "[s]ave copied image and colors, or cancel: "
+            presentation::choices(
+                output,
+                "Save draft:",
+                &["[s]ave copied image and colors", "cancel  Discard draft"],
+            )?;
+            "Choice (s/cancel; no default): "
         };
         let Some(choice) = create_prompt(&mut lines, output, label)? else {
             return create_cancelled(output);
@@ -329,18 +368,25 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
                 generate_create_image(&workflow, &mut draft, output)?;
                 colors = draft.generated_colors()?;
             }
-            _ => writeln!(
+            _ => presentation::error(
                 output,
-                "Choose one of the listed actions; draft unchanged, nothing saved."
+                "Choose one of the listed actions; draft unchanged, nothing saved.",
             )?,
         }
     }
     let id = workflow.save(draft)?;
-    writeln!(output, "Saved Profile {id}. No Activation yet.")?;
+    presentation::line(
+        output,
+        presentation::Role::Success,
+        &format!("Saved Profile {id}. No Activation yet."),
+    )?;
     loop {
-        let Some(choice) =
-            create_prompt(&mut lines, output, "[y] Use now / [n] Not now (default): ")?
-        else {
+        presentation::choices(
+            output,
+            "Use saved Profile:",
+            &["[y] Use now", "[n] Not now (default)"],
+        )?;
+        let Some(choice) = create_prompt(&mut lines, output, "Choice (y/n; default: n): ")? else {
             writeln!(
                 output,
                 "Not now; saved Profile remains, terminal unchanged."
@@ -349,7 +395,11 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
         };
         match choice.to_ascii_lowercase().as_str() {
             "" | "n" | "no" | "not now" => {
-                writeln!(output, "Saved Profile {id}; terminal unchanged.")?;
+                presentation::line(
+                    output,
+                    presentation::Role::Success,
+                    &format!("Saved Profile {id}; terminal unchanged."),
+                )?;
                 return Ok(());
             }
             "y" | "yes" | "use now" => {
@@ -376,7 +426,7 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
                 }
                 return Ok(());
             }
-            _ => writeln!(output, "Choose y or n; saved Profile remains.")?,
+            _ => presentation::error(output, "Choose y or n; saved Profile remains.")?,
         }
     }
 }
@@ -386,7 +436,7 @@ fn create_prompt(
     output: &mut impl Write,
     label: &str,
 ) -> Result<Option<String>, CliError> {
-    write_text(output, label)?;
+    presentation::prompt(output, label)?;
     output.flush()?;
     Ok(input
         .next()
@@ -504,13 +554,19 @@ fn pick_image_with(
         .unwrap_or_else(|| paths.home.clone());
     let mut search = String::new();
     loop {
-        writeln!(
+        presentation::heading(output, &format!("Images in {}", current.display()))?;
+        writeln!(output)?;
+        presentation::line(
             output,
-            "Images in {} (Downloads: {}, Pictures: {}):",
-            current.display(),
-            roots[0].display(),
-            roots[1].display()
+            presentation::Role::Choice,
+            &format!("  d  Downloads: {}", roots[0].display()),
         )?;
+        presentation::line(
+            output,
+            presentation::Role::Choice,
+            &format!("  p  Pictures: {}", roots[1].display()),
+        )?;
+        writeln!(output)?;
         let entries = match fs::read_dir(&current) {
             Ok(entries) => {
                 let mut found = Vec::new();
@@ -534,16 +590,22 @@ fn pick_image_with(
                 found
             }
             Err(error) => {
-                writeln!(
+                presentation::error(
                     output,
-                    "Cannot browse {}: {error}. Choose another location.",
-                    current.display()
+                    &format!(
+                        "Cannot browse {}: {error}. Choose another location.",
+                        current.display()
+                    ),
                 )?;
                 Vec::new()
             }
         };
         for (index, name) in entries.iter().take(100).enumerate() {
-            writeln!(output, "{}: {}", index + 1, name)?;
+            presentation::line(
+                output,
+                presentation::Role::Choice,
+                &format!("  {}: {}", index + 1, name),
+            )?;
         }
         if entries.len() > 100 {
             writeln!(
@@ -554,7 +616,7 @@ fn pick_image_with(
         let Some(choice) = create_prompt(
             input,
             output,
-            "Number/relative path, path:/absolute/path, .. parent, d Downloads, p Pictures, /text search, or cancel: ",
+            "Number/relative path\npath:/absolute/path\n.. parent; d Downloads; p Pictures\n/text search; cancel\nChoice (no default): ",
         )?
         else {
             return Ok(false);
@@ -570,10 +632,12 @@ fn pick_image_with(
                 current = destination.clone();
                 search.clear();
             } else {
-                writeln!(
+                presentation::error(
                     output,
-                    "{} is not available; choose another location.",
-                    destination.display()
+                    &format!(
+                        "{} is not available; choose another location.",
+                        destination.display()
+                    ),
                 )?;
             }
             continue;
@@ -607,10 +671,12 @@ fn pick_image_with(
         }
         match import(&selected) {
             Ok(()) => return Ok(true),
-            Err(error) => writeln!(
+            Err(error) => presentation::error(
                 output,
-                "Cannot use {}: {error}. Choose another PNG/JPEG; nothing saved.",
-                selected.display()
+                &format!(
+                    "Cannot use {}: {error}. Choose another PNG/JPEG; nothing saved.",
+                    selected.display()
+                ),
             )?,
         }
     }
@@ -703,7 +769,7 @@ fn command_new(args: &[String], output: &mut impl Write) -> Result<(), CliError>
     }
     let digest = hex_sha256(&bytes);
     let profile = format!(
-        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.{extension}\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n"
+        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.{extension}\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = {NEW_PROFILE_WALLPAPER_OPACITY}\n\n[colors]\nmode = \"generated\"\n"
     );
     parse_named_profile_toml(id.as_str(), &application.config, &profile)?;
     let profile_path = profiles.join(format!("{id}.toml"));
@@ -777,7 +843,7 @@ fn new_generated(name: &str, seed: &str, output: &mut impl Write) -> Result<(), 
     let bytes = cursor.into_inner();
     let digest = hex_sha256(&bytes);
     let text = format!(
-        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.png\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[wallpaper.generation]\nalgorithm = \"gradient-v1\"\nseed = \"{seed}\"\nwidth = {width}\nheight = {height}\n\n[colors]\nmode = \"generated\"\n"
+        "schema_version = 2\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = \"{id}.png\"\nowned_sha256 = \"{digest}\"\nfit = \"cover\"\nposition = \"center\"\nopacity = {NEW_PROFILE_WALLPAPER_OPACITY}\n\n[wallpaper.generation]\nalgorithm = \"gradient-v1\"\nseed = \"{seed}\"\nwidth = {width}\nheight = {height}\n\n[colors]\nmode = \"generated\"\n"
     );
     parse_named_profile_toml(id.as_str(), &application.config, &text)?;
     let root = application.paths.managed_root();
@@ -827,7 +893,7 @@ fn new_from_source(
     }
     let candidate = toml_edit::Value::from(candidate).to_string();
     let text = format!(
-        "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = {candidate}\nfit = \"cover\"\nposition = \"center\"\nopacity = 0.1\n\n[colors]\nmode = \"generated\"\n"
+        "schema_version = 1\n\n[wallpaper]\nmode = \"source\"\nsource = \"{source}\"\nselection = \"path\"\npath = {candidate}\nfit = \"cover\"\nposition = \"center\"\nopacity = {NEW_PROFILE_WALLPAPER_OPACITY}\n\n[colors]\nmode = \"generated\"\n"
     );
     parse_named_profile_toml(id.as_str(), &application.config, &text)?;
     let root = application.paths.managed_root();
@@ -1426,11 +1492,45 @@ fn command_tui(
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         return write_text(
             output,
-            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k select without activating; Enter/p toggles the internal sample\non small terminals. Tab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, review, Save, then Use now / Not now.\nEdit: Wallpaper/Colors/Terminal, confirmed Save and use, or cancel.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nMinimum 40x12; smaller terminals show a resize notice (Esc cancels).\nCreate errors: F1 details. Editor/main results: v details.\nInternal previews are approximate, NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings, doctor, init/repair, update and uninstall remain in Actions.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
+            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k automatically preview without activating, even while loading.\nCompact layouts show list and sample; Enter/p enlarges the sample.\nTab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, review, Save, then Use now / Not now.\nEdit: Wallpaper/Colors/Terminal, confirmed Save and use, or cancel.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nManagement minimum 60x18 preserves photo space; smaller windows show resize\nguidance (Esc cancels). Create/Edit forms still support 40x12. Compact lists\nelide long IDs; the header shows the selection and * marks the active Profile.\nAll actions, nested image pickers, reports and first-start initialization stay full-screen.\nInput forms: Enter next/submit, Tab/Shift-Tab fields, Ctrl-U clear, Esc cancel.\nInvalid input retains values; F1 shows error details.\nDelete: y confirms, Enter/n/Esc/Ctrl-C cancels; arrows scroll the summary.\nCreate errors: F1 details. Editor/main results: v details.\nGhostty receives a static image behind sample text; other terminals show a\nlabelled color-cell fallback. Wallpaper uses linear-light sRGB (Ghostty's\nLinux default), not inferred native/P3 blending. Saved opacity/RGB are unchanged.\nInherited settings are illustrative; v explains limitations. Preview errors never activate. Random Use resolves again; a\nchanged Source may change the candidate. Local Profile/image changes invalidate\nthe sample. Internal previews are NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings/Source configuration, doctor, init/repair, update and uninstall remain in Actions.\nReports: arrows/PageUp/PageDown scroll, Enter/Esc back. i views the original image.\nMaintenance mutations require y; Enter/n/Esc/Ctrl-C/D declines.\nLong jobs show progress; Esc closes read-only jobs (work may finish in background).\nOnce a mutation starts, wait for completion/recovery; cancellation is unavailable.\nUninstall returns to the browser and preserves Intent/History.\nRestart Ghostty Wall after an installed update; this process keeps its old version.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
         );
     }
     let seed = parse_seed_only(args)?;
     let paths = process_paths()?;
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        let mut screen = editor::Screen::open(output)?;
+        if !paths.managed_root().join("config.toml").exists()
+            && !maintenance::fresh_start(screen.terminal.backend_mut())?
+        {
+            return Ok(());
+        }
+        let result = (|| {
+            let mut application = Application::load(seed)?;
+            let profiles = profile_ids(&application.paths.managed_root().join("profiles"))?;
+            let sources = application
+                .config
+                .sources
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+            let mut browser = TerminalBrowser::new(sources, profiles);
+            management::run(
+                screen.terminal.backend_mut(),
+                &mut application,
+                &mut browser,
+                seed,
+            )
+        })();
+        if let Err(error) = &result {
+            management::details(
+                screen.terminal.backend_mut(),
+                &format!(
+                    "Cannot open browser: {error}\nInspect the reported state before retrying."
+                ),
+            )?;
+        }
+        return result;
+    }
     if !paths.managed_root().join("config.toml").exists() {
         write_text(
             output,
@@ -1452,9 +1552,6 @@ fn command_tui(
         .map(|(id, _)| id.clone())
         .collect();
     let mut browser = TerminalBrowser::new(sources, profiles);
-    if io::stdin().is_terminal() && io::stdout().is_terminal() {
-        return management::run(output, &mut application, &mut browser, seed);
-    }
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
     loop {
@@ -1563,7 +1660,7 @@ fn prompt_tui(
     output: &mut impl Write,
     label: &str,
 ) -> Result<Option<String>, CliError> {
-    write_text(output, label)?;
+    presentation::prompt(output, label)?;
     output.flush()?;
     Ok(input
         .next()
@@ -1590,6 +1687,19 @@ fn tui_command(
         };
     }
     let selected = browser.selected_profile().cloned();
+    if matches!(action, "U" | "X" | "p" | "M") {
+        presentation::heading(output, "Confirm maintenance action:")?;
+        presentation::line(
+            output,
+            presentation::Role::Warning,
+            "Warning: Only explicit confirmation performs this action.",
+        )?;
+        presentation::line(
+            output,
+            presentation::Role::Choice,
+            "Enter or b: cancel (default)",
+        )?;
+    }
     let target = match action {
         "?" => {
             write_text(
@@ -1711,6 +1821,15 @@ fn tui_command(
         }
         "o" => {
             let name = ask!("New Source ID: ");
+            presentation::choices(
+                output,
+                "Source kind:",
+                &[
+                    "local  Directory",
+                    "github  GitHub repository",
+                    "b  Cancel (no default)",
+                ],
+            )?;
             let kind = ask!("Source kind (local/github): ");
             let location = ask!("Directory path or owner/repo: ");
             let mut args = vec!["add".into(), name, kind.clone(), location];
@@ -1747,7 +1866,7 @@ fn tui_command(
                 "w" => "Wallpaper fields: mode, source, path, fit, position, opacity, repeat",
                 _ => "Fields: wallpaper.*, colors.*, terminal.* (see user guide)",
             };
-            writeln!(output, "{fields}")?;
+            presentation::heading(output, fields)?;
             let key = ask!("Field: ");
             let field = if !prefix.is_empty() && !key.contains('.') {
                 format!("{prefix}{key}")

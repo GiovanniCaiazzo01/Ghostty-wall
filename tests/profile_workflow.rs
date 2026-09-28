@@ -24,6 +24,92 @@ fn seed() -> Sha256Digest {
 }
 
 #[test]
+fn adding_first_wallpaper_to_existing_profile_keeps_editor_semantics() {
+    let (_tmp, paths) = fixture();
+    let workflow = ProfileWorkflows::load(paths.clone()).unwrap();
+    let image = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/white.png");
+    for (id, wallpaper, expected) in [
+        ("unmanaged", "", Some(0.1)),
+        ("disabled", "[wallpaper]\nmode = \"none\"\n", None),
+    ] {
+        let path = paths.managed_root().join(format!("profiles/{id}.toml"));
+        fs::write(&path, format!("schema_version = 2\n{wallpaper}")).unwrap();
+        let mut draft = workflow.edit(id).unwrap();
+        workflow.import_image(&mut draft, &image).unwrap();
+        let document = draft.document().parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            document["wallpaper"]
+                .get("opacity")
+                .and_then(|v| v.as_float()),
+            expected
+        );
+        assert!(document.get("terminal").is_none());
+    }
+}
+
+#[test]
+fn existing_image_replacement_preserves_explicit_and_omitted_opacity() {
+    let (_tmp, paths) = fixture();
+    let workflow = ProfileWorkflows::load(paths.clone()).unwrap();
+    let image = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/white.png");
+    for (id, opacity, expected) in [
+        ("explicit", "opacity = 0.37\n", Some(0.37)),
+        ("omitted", "", None),
+    ] {
+        let path = paths.managed_root().join(format!("profiles/{id}.toml"));
+        fs::write(&path, format!("schema_version = 2\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\n{opacity}\n[terminal]\nbackground_opacity = 0.84\n")).unwrap();
+        let original = fs::read(&path).unwrap();
+        let mut draft = workflow.edit(id).unwrap();
+        workflow.import_image(&mut draft, &image).unwrap();
+        let document = draft.document().parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            document["wallpaper"]
+                .get("opacity")
+                .and_then(|v| v.as_float()),
+            expected
+        );
+        assert_eq!(
+            document["terminal"]["background_opacity"].as_float(),
+            Some(0.84)
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        workflow.save(draft).unwrap();
+        let saved = workflow.edit(id).unwrap();
+        let document = saved.document().parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            document["wallpaper"]
+                .get("opacity")
+                .and_then(|v| v.as_float()),
+            expected
+        );
+    }
+}
+
+#[test]
+fn new_draft_image_replacement_keeps_explicit_opacity_and_terminal_transparency() {
+    let (_tmp, paths) = fixture();
+    let workflow = ProfileWorkflows::load(paths).unwrap();
+    let mut draft = workflow.create("chosen").unwrap();
+    assert!(!draft.document().contains("opacity"));
+    let image = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/white.png");
+    workflow.import_image(&mut draft, &image).unwrap();
+    let mut document = draft.document().parse::<toml_edit::DocumentMut>().unwrap();
+    document["wallpaper"]["opacity"] = toml_edit::value(0.37);
+    document["terminal"]["background_opacity"] = toml_edit::value(0.84);
+    draft
+        .set_document(workflow.config(), document.to_string())
+        .unwrap();
+    workflow.import_image(&mut draft, &image).unwrap();
+    let document = draft.document().parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(document["wallpaper"]["opacity"].as_float(), Some(0.37));
+    assert_eq!(
+        document["terminal"]["background_opacity"].as_float(),
+        Some(0.84)
+    );
+    workflow.save(draft).unwrap();
+}
+
+#[test]
 fn draft_import_cancel_collision_and_complete_generated_colors() {
     let (_tmp, paths) = fixture();
     let workflow = ProfileWorkflows::load(paths.clone()).unwrap();

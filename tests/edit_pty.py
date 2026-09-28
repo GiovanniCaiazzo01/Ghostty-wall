@@ -58,7 +58,13 @@ class EditSession(Session):
             raise AssertionError(f"Missing {needle!r}: {output()[-2500:]!r}")
 
     def finish(self):
-        self.proc.wait(timeout=30)
+        # An asynchronous preview can finish while q is in flight. Drain its last
+        # frame like a real terminal instead of filling the PTY and blocking exit.
+        deadline = time.monotonic() + 30
+        while self.proc.poll() is None and time.monotonic() < deadline:
+            if select.select([self.master], [], [], 0.01)[0]:
+                self.data.extend(os.read(self.master, 65536))
+        self.proc.wait(timeout=1)
         while select.select([self.master], [], [], 0)[0]:
             self.data.extend(os.read(self.master, 65536))
         super().finish()
@@ -93,6 +99,42 @@ class EditPty(unittest.TestCase):
         session.wait(ALT_ENTER, timeout=30)
         return session
 
+    def test_small_picker_exposes_complete_selected_long_path_without_leaving_editor(self):
+        downloads = self.home / "Downloads"
+        downloads.mkdir()
+        names = ["a" * 50 + "-forest.png", "a" * 50 + "-mountain.png"]
+        for name in names:
+            (downloads / name).write_bytes((ROOT / "tests/fixtures/white.png").read_bytes())
+        before = self.snapshot()
+        session = self.session("boy")
+        session.wait(b"Edit Profile boy")
+        session.send("\r")
+        session.wait(b"Number/relative path")
+        clears = session.data.count(b"\x1b[2J")
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+        session.send("\x00")
+        session.wait(b"\x1b[2J", clears + 1)
+        session.wait(b"Esc cancel")
+        self.assertNotIn(b"-forest.png", session.screen())
+        self.assertNotIn(b"-mountain.png", session.screen())
+        for index, name in enumerate(names):
+            if index:
+                session.send("\x1b[B")
+            session.send("\x1bOP")  # F1: selected path and any validation error.
+            session.wait(name[-12:].encode())
+            visible = b"".join(session.screen().split())
+            self.assertIn(str(downloads / name).encode(), visible)
+            session.send("\r")
+            session.wait(b"Number/relative path")
+            session.wait(b"F1 path/error")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
+        session.send("\x1b")
+        session.wait(b"Edit Profile boy")
+        session.send("q")
+        session.finish()
+        self.assertEqual(session.data.count(ALT_ENTER), 1)
+        self.assertEqual(self.snapshot(), before)
+
     def test_keyboard_colors_numbers_replacement_decline_then_save_and_use_once(self):
         before = self.snapshot()
         session = self.session("boy")
@@ -124,7 +166,8 @@ class EditPty(unittest.TestCase):
         session.wait(str(downloads).encode())
         session.wait(b"Number/relative path")
         session.send("/new\n1\n")
-        session.wait(ALT_ENTER, 2)
+        session.wait(b"Edit Profile boy")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         self.assertEqual(self.snapshot(), before)
         session.send("s")
         session.wait(b"Save and use Profile boy?")
@@ -214,7 +257,8 @@ class EditPty(unittest.TestCase):
         session.send("\r")
         session.wait(b"Number/relative path")
         session.send("cancel\n")
-        session.wait(ALT_ENTER, 2)
+        session.wait(b"Edit Profile boy")
+        self.assertNotIn(b"\x1b[?1049l", session.data)
         session.send("\t\t\x1b[B\r18\r")
         # Internal mode holds no preview lock. A newer apply must never be rolled back on cancel.
         self.cli("apply", "boy")

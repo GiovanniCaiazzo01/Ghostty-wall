@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListState, Paragraph, Wrap},
 };
 
-const EDIT_HELP: &str = "Usage: ghostty-wall edit [PROFILE]\n\nOpen a keyboard visual draft editor, or select a Profile when omitted.\nRequires an interactive terminal; a missing named Profile is an error.\nTab switches Wallpaper / Colors / Terminal. Up/Down selects a control.\nLeft/Right increments numbers or cycles choices; Enter opens exact numeric\nentry or a color picker. Color picker: arrows choose a sample, Enter accepts,\nh enters exact #RRGGBB, a resets one slot to Automatic.\nWallpaper: Replace image uses create's Downloads/Pictures picker (Enter prompts);\nGenerate another wallpaper is explicit. Customized colors survive replacement.\nGenerated colors: only edited slots become Customized; others stay Automatic.\nCustomizing version 1 generated colors saves as version 2.\nUnmanaged colors stay unmanaged until you explicitly enable automatic colors.\n\ns opens Save and use confirmation (default: Back to editor); declining keeps\nthe draft. Esc/q cancels. p toggles the internal sample on small terminals.\nNo Profile, Projection or History writes happen before confirmed Save and use.\nThe internal sample is approximate, NOT live Ghostty reload. Save and apply\nare separate transactions; reload acceptance is not proof of visible change.\nA failed save retains the draft; uncertain publication requires inspection.\n\nAdvanced: edit PROFILE FIELD VALUE saves immediately without applying.\nSee the user guide for supported field names. update updates the program only.\n";
+const EDIT_HELP: &str = "Usage: ghostty-wall edit [PROFILE]\n\nOpen a keyboard visual draft editor, or select a Profile when omitted.\nRequires an interactive terminal; a missing named Profile is an error.\nTab switches Wallpaper / Colors / Terminal. Up/Down selects a control.\nLeft/Right increments numbers or cycles choices; Enter opens exact numeric\nentry or a color picker. Color picker: arrows choose a sample, Enter accepts,\nh enters exact #RRGGBB, a resets one slot to Automatic.\nWallpaper: Replace image opens a full-screen Downloads/Pictures picker;\nGenerate another wallpaper is explicit. Customized colors survive replacement.\nGenerated colors: only edited slots become Customized; others stay Automatic.\nCustomizing version 1 generated colors saves as version 2.\nUnmanaged colors stay unmanaged until you explicitly enable automatic colors.\n\ns opens Save and use confirmation (default: Back to editor); declining keeps\nthe draft. Esc/q cancels. p toggles the internal sample on small terminals.\nNo Profile, Projection or History writes happen before confirmed Save and use.\nThe internal sample is approximate, NOT live Ghostty reload. Save and apply\nare separate transactions; reload acceptance is not proof of visible change.\nA failed save retains the draft; uncertain publication requires inspection.\n\nAdvanced: edit PROFILE FIELD VALUE saves immediately without applying.\nSee the user guide for supported field names. update updates the program only.\n";
 
 pub(super) fn command(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
     let report = flow(args, output, false)?;
@@ -132,22 +132,41 @@ pub(super) fn random_seed() -> Result<crate::domain::Sha256Digest, CliError> {
     Ok(crate::domain::Sha256Digest::from_bytes(bytes))
 }
 
+thread_local! {
+    static SCREEN_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct Screen<'a, W: Write> {
     pub(super) terminal: Terminal<CrosstermBackend<&'a mut W>>,
 }
 impl<'a, W: Write> Screen<'a, W> {
     pub(super) fn open(output: &'a mut W) -> Result<Self, CliError> {
         let mut terminal = Terminal::new(CrosstermBackend::new(output))?;
-        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-        if let Err(e) = enable_raw_mode() {
-            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-            return Err(e.into());
+        if SCREEN_DEPTH.get() == 0 {
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            if let Err(e) = enable_raw_mode() {
+                let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+                return Err(e.into());
+            }
         }
-        Ok(Self { terminal })
+        SCREEN_DEPTH.set(SCREEN_DEPTH.get() + 1);
+        let mut screen = Self { terminal };
+        screen.redraw()?;
+        Ok(screen)
+    }
+
+    pub(super) fn redraw(&mut self) -> Result<(), CliError> {
+        let size = self.terminal.size()?;
+        self.terminal.resize(size.into())?;
+        Ok(())
     }
 }
 impl<W: Write> Drop for Screen<'_, W> {
     fn drop(&mut self) {
+        SCREEN_DEPTH.set(SCREEN_DEPTH.get() - 1);
+        if SCREEN_DEPTH.get() != 0 {
+            return;
+        }
         let _ = disable_raw_mode();
         let _ = execute!(
             self.terminal.backend_mut(),
@@ -491,9 +510,8 @@ fn edit_loop(
                     KeyCode::Char('s') => view.mode = Mode::Confirm(false),
                     KeyCode::Char('p') => view.sample = !view.sample,
                     KeyCode::Char('v') => {
-                        drop(screen);
-                        management::details(output, &view.status)?;
-                        screen = Screen::open(output)?;
+                        management::details(screen.terminal.backend_mut(), &view.status)?;
+                        screen.redraw()?;
                     }
                     _ => (),
                 }
@@ -535,14 +553,10 @@ fn edit_loop(
                         editor.set_choice(section, field, values[index])
                     }
                     Control::Image if enter => {
-                        drop(screen);
-                        let stdin = io::stdin();
-                        let result =
-                            pick_image_with(paths, &mut stdin.lock().lines(), output, |path| {
-                                editor.import_image(workflow, path)
-                            });
-                        screen = Screen::open(output)?;
-                        result?;
+                        forms::image(screen.terminal.backend_mut(), paths, |path| {
+                            editor.import_image(workflow, path)
+                        })?;
+                        screen.redraw()?;
                         thumbnail = self::thumbnail(editor);
                         Ok(())
                     }

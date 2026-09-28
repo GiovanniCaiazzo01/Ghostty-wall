@@ -435,6 +435,34 @@ pub fn plan_github_profile_with_theme_json(
     )
 }
 
+/// Resolves a static Profile sample without observing or locking active state.
+/// Explicit Use must still execute the normal inspected apply workflow.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_profile_preview_json(
+    config_dir: &Path,
+    home: &Path,
+    managed_root: &Path,
+    profile_id: &IntentId,
+    config: &ConfigIntent,
+    profile: &ProfileIntent,
+    seed: Option<&crate::domain::ResolutionSeed>,
+    github: &dyn GithubApi,
+    themes: &dyn ThemeResolver,
+) -> Result<Value, PlanError> {
+    plan_profile_json_inner(
+        config_dir,
+        home,
+        managed_root,
+        profile_id,
+        config,
+        profile,
+        seed,
+        None,
+        Some(github),
+        Some(themes),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn plan_profile_json_inner(
     config_dir: &Path,
