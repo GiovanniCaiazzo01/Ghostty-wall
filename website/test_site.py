@@ -48,13 +48,28 @@ for page in root.rglob('*.html'):
 for page in [root.parent.parent / 'README.md', root / 'installation/index.html']:
     text = re.sub(r'<[^>]+>', '', page.read_text())
     for snippet in ['curl -fsSL https://raw.githubusercontent.com/GiovanniCaiazzo01/Ghostty-wall/main/scripts/install-release.sh | bash',
-                    'only supported installation method', 'Linux x86_64',
-                    '~/.local/bin', 'command -v ghostty-wall', '~/.cargo/bin']:
+                    'supported installation route', 'Linux x86_64',
+                    '~/.local/bin', 'Inspect the installer']:
         assert snippet in text, (page, snippet)
     for removed in ['cargo install', 'Install with Cargo', 'Manual installation',
                     'Download the Linux binary', 'Try a source checkout']:
         assert removed not in text, (page, removed)
 repository = root.parent.parent
+readme = (repository / 'README.md').read_text()
+assert len(readme.splitlines()) <= 80, 'Keep the README a short introduction, not a reference manual'
+assert readme.index('media/screenshots/welcome.png') < readme.index('## Install')
+assert 'internal previews, not live Ghostty reload' in readme
+assert 'not live wallpaper switching' in readme
+overview = (root / 'index.html').read_text()
+assert overview.index('assets/ghostty-welcome.png') < overview.index('id="start-here"')
+assert 'not live wallpaper switching' in overview
+assert 'terminal-demo' not in overview, 'Use real captures, not a simulated terminal'
+for source, deployed in [('welcome.png', 'ghostty-welcome.png'),
+                         ('profile-browser.png', 'profile-browser.png'),
+                         ('profile-browser.gif', 'profile-browser.gif')]:
+    assert (repository / 'media/screenshots' / source).read_bytes() == (root / 'assets' / deployed).read_bytes(), source
+for snippet in ['command -v ghostty-wall', '~/.cargo/bin']:
+    assert snippet in (root / 'installation/index.html').read_text(), snippet
 site_url = 'https://giovannicaiazzo01.github.io/Ghostty-wall/'
 markdown = [*repository.glob('*.md'), *repository.joinpath('docs').rglob('*.md'), root.parent / 'README.md']
 for document in markdown:

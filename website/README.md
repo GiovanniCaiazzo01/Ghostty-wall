@@ -13,9 +13,13 @@ A responsive, static documentation site for [Ghostty Wall](https://github.com/Gi
 
 ## Content sources
 
-Content follows `README.md` and current CLI help/source: guided creation, visual editing, safe deletion, automatic read-only Profile previews, contained full-screen forms/maintenance, Sources, palettes, History and curl-managed updates. The curl installer is the only documented installation route (Linux x86_64); legacy Cargo copies are mentioned only for PATH conflict guidance. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version comes from `Cargo.toml`. Tests check repository Markdown links, links into the generated site, curl-only installation guidance in both README and site, key feature coverage and version agreement.
+README and site introduction show the result first, followed by installation and a short quick start. Detailed behavior lives in guide/reference pages and [`docs/advanced-usage.md`](../docs/advanced-usage.md). Content follows current CLI help/source; update `generate.py` alongside user-facing changes. The curl installer remains the supported route for Linux x86_64; legacy Cargo copies appear only in PATH conflict guidance. The documentation version comes from `Cargo.toml`. Tests check links, supported installation guidance, screenshot placement, feature coverage and version agreement.
 
-`dist/assets/mascot.png` and `dist/assets/welcome.png` are the project's existing images. The introduction terminal is an illustrative example, not a screenshot of CLI output; its palette strip is illustrative.
+## Screenshots
+
+`media/screenshots/` contains real Ghostty captures, copied into `dist/assets/` (`welcome.png` becomes `ghostty-welcome.png`). The welcome screenshot uses the bundled Profile's generated Ghostty configuration; its terminal shows actual `list` and `--version` output. The browser screenshot and GIF show internal previews, not live reload. The GIF is a short sequence of captured frames, linked rather than autoplayed. Captures use an isolated HOME and private D-Bus session; no personal desktop or existing terminal contents are included. Update both asset locations when replacing screenshots.
+
+`dist/assets/mascot.png` and `dist/assets/welcome.png` remain the original project artwork, not screenshots.
 
 The visible release version and release links track GitHub’s latest stable release independently.
 

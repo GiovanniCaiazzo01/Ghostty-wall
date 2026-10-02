@@ -24,3 +24,7 @@
 .syn-section{color:var(--violet)}
 .demo-top{background:linear-gradient(100deg,#192444,#25234b)}
 .version-pill>[data-release-version]{min-width:0;overflow:hidden;text-overflow:ellipsis}.version-pill small{flex-shrink:0}
+.product-shot{margin:28px 0 0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.product-shot img{display:block;width:100%;height:auto}
+.product-shot figcaption{padding:12px 16px;color:var(--muted);font-size:14px}
+.product-shot figcaption a{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
