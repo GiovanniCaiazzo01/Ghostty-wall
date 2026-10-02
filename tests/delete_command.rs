@@ -31,12 +31,9 @@ impl Sandbox {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
+        if let Err(error) = child.stdin.take().unwrap().write_all(input.as_bytes()) {
+            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+        }
         child.wait_with_output().unwrap()
     }
     fn ok(&self, args: &[&str], input: &str) -> String {
@@ -78,6 +75,15 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     walk(root, root, &mut result);
     result
+}
+
+#[test]
+fn early_exit_preserves_command_error_with_unread_input() {
+    let s = Sandbox::new();
+    let result = s.run(&["delete", "missing"], &"y".repeat(128 * 1024));
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("does not exist"));
+    assert!(result.stdout.is_empty());
 }
 
 #[test]

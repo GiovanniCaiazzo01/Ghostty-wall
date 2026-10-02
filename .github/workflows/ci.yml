@@ -5,7 +5,39 @@ on:
   pull_request:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.paths.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            git ls-files -z > "$RUNNER_TEMP/changed-files"
+          elif [[ "$EVENT_NAME" == pull_request ]]; then
+            git diff --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          else
+            git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          fi
+          runtime=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              *.md|docs/*|website/*) ;;
+              *) runtime=true; break ;;
+            esac
+          done < "$RUNNER_TEMP/changed-files"
+          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
   rust:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -29,6 +61,8 @@ jobs:
           python3 website/test_site.py
           git diff --exit-code -- website/dist
   bash-v0-regression:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -37,6 +71,8 @@ jobs:
       - name: Test release installer
         run: bash scripts/test-install-release.sh
   shellcheck:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
