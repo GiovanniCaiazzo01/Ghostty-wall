@@ -1,34 +1,12 @@
 # Agent Guide
 
-Use the smallest relevant documentation set for the task.
-
-## Product contracts
+## Documentation
 
 - Read [CONTEXT.md](./CONTEXT.md) when changing domain language or model boundaries.
-- Read [accepted RFCs](./docs/rfc/) when changing persisted formats, identifiers, resolution, planning, or projection.
-- Read [ADRs](./docs/adr/) when changing architecture or ownership boundaries.
-
-## Engineering guide
-
-- For user-facing behavior changes, check and update relevant docs, examples, and CLI help before finishing. This includes CLI flags, Profiles, config formats, apply/plan/history/replay, TUI, install/update, palette generation, and user-visible files or directories.
-- Start with [docs/agents/README.md](./docs/agents/README.md).
-- Read [principles.md](./docs/agents/principles.md) for every implementation.
-- Read [comments.md](./docs/agents/comments.md) when adding or reviewing code comments.
-- Read only the topic documents linked there that match the work.
-
-## Agent skills
-
-### Issue tracker
-
-Specs and issues use the local markdown tracker under `.scratch/`. See [issue-tracker.md](./docs/agents/issue-tracker.md).
-
-### Triage labels
-
-Local issue status uses the canonical triage vocabulary. See [triage-labels.md](./docs/agents/triage-labels.md).
-
-### Domain docs
-
-This is a single-context repository. See [domain.md](./docs/agents/domain.md).
+- For user-facing behavior changes, update relevant [README](./README.md), examples, CLI help and [website content](./website/README.md).
+- When changing persisted formats or identifiers, preserve existing compatibility and add regression coverage in `tests/`.
+- Public work is tracked in [GitHub issues](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues). `.scratch/` is ignored local working material, not published documentation.
+- Documentation-only changes do not require a version bump or release tag. Pages deploys independently; its version label follows `Cargo.toml`.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
@@ -64,13 +42,6 @@ This project is indexed by GitNexus as **Ghostty-wall** (2834 symbols, 10241 rel
 
 ## CLI
 
-| Task | Read this skill file |
-| --- | --- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
+Use the MCP tools listed above, or `node .gitnexus/run.cjs --help` when the local runner is available. GitNexus skills and index files are local tooling, not published repository documentation.
 
 <!-- gitnexus:end -->

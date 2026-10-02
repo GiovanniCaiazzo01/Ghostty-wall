@@ -10,9 +10,9 @@ Ghostty Wall can generate a darkened wallpaper-derived background, tinted text, 
 - **macOS:** experimental; no supported installer
 - **Windows:** unsupported
 
-Live draft reload on Linux remains [unverified](docs/probes/live-preview-linux.md#ticket-10-preflight-2026-09-27), including cancel restoration and window scope. Editor and sidebar samples are not live reload.
+Live draft reload on Linux remains [unverified](https://giovannicaiazzo01.github.io/Ghostty-wall/troubleshooting/#reload), including cancel restoration and window scope. Editor and sidebar samples are not live reload.
 
-> Documentation: [website](https://giovannicaiazzo01.github.io/Ghostty-wall/) · [User Guide](docs/user-guide.md)
+> Documentation: [website](https://giovannicaiazzo01.github.io/Ghostty-wall/) · [Quick start](https://giovannicaiazzo01.github.io/Ghostty-wall/quick-start/)
 
 ## Install
 
@@ -121,7 +121,7 @@ Headings, choices, warnings, retry errors and success use restrained semantic co
 
 ## Delete a Profile
 
-`ghostty-wall delete boy` confirms `boy`; `ghostty-wall delete` shows a numbered selector with `[active]` marked. Enter, EOF, or `n` cancels; `y` confirms removal of the named Profile and only proven-exclusive owned image data. The TUI's `x` action uses the same flow. Welcome is protected. Active deletion commits existing Welcome before removal; fallback/reconciliation failure retains the Profile. Reload is best-effort, not proof of visible change. If removal fails after fallback, Welcome may remain active. Shared/reused/ambiguous images, originals, Sources, History, Environments, and Durable Assets are preserved. Identical-file reuse does not grant cleanup ownership, and deletion cannot follow a substituted `profiles/` symlink. Removal isolates and verifies the captured file before unlinking; unconfirmed replacements are retained. A Profile found again during removal or the renewed ownership check keeps its image and requires fresh deletion confirmation; committed Welcome fallback is not undone. Interrupted removal may leave files in `<Managed Root>/.tmp-delete-<token>/` for inspection, never automatic cleanup. After History replay, apply a Profile before deleting. Older installations without Welcome are not silently changed. See `delete --help` and the [deletion guide](docs/user-guide.md#delete-a-profile-safely).
+`ghostty-wall delete boy` confirms `boy`; `ghostty-wall delete` shows a numbered selector with `[active]` marked. Enter, EOF, or `n` cancels; `y` confirms removal of the named Profile and only proven-exclusive owned image data. The TUI's `x` action uses the same flow. Welcome is protected. Active deletion commits existing Welcome before removal; fallback/reconciliation failure retains the Profile. Reload is best-effort, not proof of visible change. If removal fails after fallback, Welcome may remain active. Shared/reused/ambiguous images, originals, Sources, History, Environments, and Durable Assets are preserved. Identical-file reuse does not grant cleanup ownership, and deletion cannot follow a substituted `profiles/` symlink. Removal isolates and verifies the captured file before unlinking; unconfirmed replacements are retained. A Profile found again during removal or the renewed ownership check keeps its image and requires fresh deletion confirmation; committed Welcome fallback is not undone. Interrupted removal may leave files in `<Managed Root>/.tmp-delete-<token>/` for inspection, never automatic cleanup. After History replay, apply a Profile before deleting. Older installations without Welcome are not silently changed. See `delete --help` and the [deletion guide](https://giovannicaiazzo01.github.io/Ghostty-wall/profiles/#delete).
 
 ## Create a profile
 
@@ -129,7 +129,7 @@ New image Profiles start with **wallpaper opacity `0.05`** (previously `0.1`), i
 
 For a reproducible **static compositing study**, run `bash scripts/compare-wallpaper-opacity.sh /tmp/gw-opacity-comparison` with ImageMagick installed. It compares `0.1`, `0.075`, and `0.05` with sample text, light/dark versions of the bundled artwork, and light/dark backgrounds. This is not a Ghostty screenshot or proof of photographic fidelity. Separate isolated Ghostty comparisons with mountain/forest photographs support `0.05` as less distracting on dark backgrounds; light backgrounds fade the photo rather than darkening it, and low-contrast text colors still need a suitable theme.
 
-`new PROFILE IMAGE` handles single images; `new PROFILE --generate SEED_HEX` stores a one-time generated PNG and recipe. Version 2 generated colors support per-slot `edit PROFILE colors.background/foreground/cursor/selection_background/selection_foreground/palette.0..15 VALUE` (lowercase RGB hex or `auto` to reset); version 1 behavior is unchanged. Version 2 requires a compatible reader for rollback; back up Intent and History before downgrading. Use `source add`, `new PROFILE --source`, and `edit PROFILE` for directory/GitHub Sources and settings without opening files (examples in [User Guide](docs/user-guide.md)). `create [PROFILE]` uses an in-memory draft and inline prompts: generate once (explicit **Another variant** before Save only), or browse system Downloads/Pictures and copy a decoded PNG/JPEG. See the [guided creation controls](docs/user-guide.md#create-a-profile-without-editing-files). `edit [PROFILE]` opens the [keyboard visual editor](docs/user-guide.md#edit-a-profile-visually): Wallpaper, Colors, and Terminal controls, color samples/exact hex, numeric steps/direct entry, and image replacement using the creation picker. Nothing is saved until confirmed **Save and use**; declining returns to the intact draft. Esc/q cancels. The internal sample is approximate, not live reload. The full TUI offers the same guided Create and visual Edit drafts; advanced `edit PROFILE FIELD VALUE` and TUI field actions still save immediately. Browser/CLI previews are read-only and do not live-reload Ghostty. `apply`, including **Use now** after creation, commits an Activation and then attempts best-effort reload. The experimental Linux [library-only draft session](docs/user-guide.md#provisional-editor-sessions-library-only) (RFC 0009) captures the starting Environment, stages validated draft images temporarily, and requests reload on update/cancel/finish without saving Profiles or appending History. Cancel/recovery restores committed Projection and cleans owned temporary images; save and reload outcomes remain separate. It is not connected to the editor or TUI. Adapter success is not evidence of visible change or restoration, nor of which windows reloaded; isolated real-window verification belongs to ticket 10. TOML remains available for advanced workflows.
+`new PROFILE IMAGE` handles single images; `new PROFILE --generate SEED_HEX` stores a one-time generated PNG and recipe. Version 2 generated colors support per-slot `edit PROFILE colors.background/foreground/cursor/selection_background/selection_foreground/palette.0..15 VALUE` (lowercase RGB hex or `auto` to reset); version 1 behavior is unchanged. Version 2 requires a compatible reader for rollback; back up Intent and History before downgrading. Use `source add`, `new PROFILE --source`, and `edit PROFILE` for directory/GitHub Sources and settings without opening files (examples in [Wallpaper sources](https://giovannicaiazzo01.github.io/Ghostty-wall/wallpapers/)). `create [PROFILE]` uses an in-memory draft and inline prompts: generate once (explicit **Another variant** before Save only), or browse system Downloads/Pictures and copy a decoded PNG/JPEG. See the [guided creation controls](https://giovannicaiazzo01.github.io/Ghostty-wall/profiles/#create). `edit [PROFILE]` opens the [keyboard visual editor](https://giovannicaiazzo01.github.io/Ghostty-wall/profiles/#edit): Wallpaper, Colors, and Terminal controls, color samples/exact hex, numeric steps/direct entry, and image replacement using the creation picker. Nothing is saved until confirmed **Save and use**; declining returns to the intact draft. Esc/q cancels. The internal sample is approximate, not live reload. The full TUI offers the same guided Create and visual Edit drafts; advanced `edit PROFILE FIELD VALUE` and TUI field actions still save immediately. Browser/CLI previews are read-only and do not live-reload Ghostty. `apply`, including **Use now** after creation, commits an Activation and then attempts best-effort reload. The experimental Linux [library-only draft session](https://giovannicaiazzo01.github.io/Ghostty-wall/troubleshooting/#reload) captures the starting Environment, stages validated draft images temporarily, and requests reload on update/cancel/finish without saving Profiles or appending History. Cancel/recovery restores committed Projection and cleans owned temporary images; save and reload outcomes remain separate. It is not connected to the editor or TUI. Adapter success is not evidence of visible change or restoration, nor of which windows reloaded; isolated real-window verification is still needed. TOML remains available for advanced workflows.
 
 Sources are configured in Ghostty Wall's `config.toml`.
 
@@ -178,7 +178,7 @@ ghostty-wall apply night
 
 Ghostty Wall can also use GitHub wallpaper sources, named Ghostty themes, explicit color palettes, and deterministic random wallpaper selection.
 
-See the [User Guide](docs/user-guide.md) for all configuration options.
+See the [Configuration reference](https://giovannicaiazzo01.github.io/Ghostty-wall/configuration/) for managed settings.
 
 ## Profile management center
 
@@ -236,7 +236,7 @@ The curl installer uses the prebuilt `x86_64-unknown-linux-gnu` release. Other L
 
 Experimental code remains in the project, but there is no supported macOS installer at this time. The curl installer is Linux x86_64 only.
 
-See the [release checklist](docs/release-checklist.md) for current status.
+See [installation and platform support](https://giovannicaiazzo01.github.io/Ghostty-wall/installation/#requirements) and contribute [macOS compatibility feedback](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/5).
 
 ## Migrating from v0
 
@@ -263,10 +263,11 @@ Then remove the binary using the same installation method you used to install it
 
 ## Documentation
 
-- [User Guide](docs/user-guide.md)
+- [User documentation](https://giovannicaiazzo01.github.io/Ghostty-wall/)
+- [Command reference](https://giovannicaiazzo01.github.io/Ghostty-wall/commands/)
+- [Maintenance and recovery](https://giovannicaiazzo01.github.io/Ghostty-wall/troubleshooting/)
 - [Changelog](CHANGELOG.md)
-- [Release Checklist](docs/release-checklist.md)
-- [RFCs](docs/rfc/)
+- [Domain glossary](CONTEXT.md)
 
 ## License
 

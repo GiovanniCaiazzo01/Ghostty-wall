@@ -7,7 +7,6 @@ on:
       - "website/**"
       - "Cargo.toml"
       - "README.md"
-      - "docs/user-guide.md"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

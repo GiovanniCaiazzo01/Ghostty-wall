@@ -54,4 +54,19 @@ for page in [root.parent.parent / 'README.md', root / 'installation/index.html']
     for removed in ['cargo install', 'Install with Cargo', 'Manual installation',
                     'Download the Linux binary', 'Try a source checkout']:
         assert removed not in text, (page, removed)
-print('Site links, curl-only installation guidance, feature coverage and documentation version OK')
+repository = root.parent.parent
+site_url = 'https://giovannicaiazzo01.github.io/Ghostty-wall/'
+markdown = [*repository.glob('*.md'), *repository.joinpath('docs').rglob('*.md'), root.parent / 'README.md']
+for document in markdown:
+    for url in re.findall(r'\]\(([^)]+)\)', document.read_text()):
+        parsed = urlsplit(url)
+        if url.startswith(site_url):
+            target = root / parsed.path.removeprefix('/Ghostty-wall/')
+            if target.is_dir():
+                target = target / 'index.html'
+            assert target.is_file(), (document, url)
+            if parsed.fragment:
+                assert f'id="{parsed.fragment}"' in target.read_text(), (document, url)
+        elif not parsed.scheme and not parsed.netloc and parsed.path:
+            assert (document.parent / parsed.path).exists(), (document, url)
+print('Repository and site links, curl-only installation guidance, feature coverage and documentation version OK')

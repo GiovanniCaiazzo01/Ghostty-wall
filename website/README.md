@@ -13,7 +13,7 @@ A responsive, static documentation site for [Ghostty Wall](https://github.com/Gi
 
 ## Content sources
 
-Content follows `README.md` and current CLI help/source: guided creation, visual editing, safe deletion, automatic read-only Profile previews, contained full-screen forms/maintenance, Sources, palettes, History and curl-managed updates. The curl installer is the only documented installation route (Linux x86_64); legacy Cargo copies are mentioned only for PATH conflict guidance. The historically referenced `docs/user-guide.md` is absent in this checkout; do not treat it as an available content source. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version comes from `Cargo.toml`. Tests check links, curl-only installation guidance in both README and site, key feature coverage and version agreement.
+Content follows `README.md` and current CLI help/source: guided creation, visual editing, safe deletion, automatic read-only Profile previews, contained full-screen forms/maintenance, Sources, palettes, History and curl-managed updates. The curl installer is the only documented installation route (Linux x86_64); legacy Cargo copies are mentioned only for PATH conflict guidance. Update `generate.py` alongside user-facing changes; prose is curated, not imported automatically. The documentation version comes from `Cargo.toml`. Tests check repository Markdown links, links into the generated site, curl-only installation guidance in both README and site, key feature coverage and version agreement.
 
 `dist/assets/mascot.png` and `dist/assets/welcome.png` are the project's existing images. The introduction terminal is an illustrative example, not a screenshot of CLI output; its palette strip is illustrative.
 
@@ -38,6 +38,6 @@ python3 website/test_site.py
 
 ## Host elsewhere
 
-GitHub Actions regenerates and publishes `website/dist/` to project Pages on pushes to `main` that change the site, `Cargo.toml`, README, user guide or Pages workflow. Set **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. URL: https://giovannicaiazzo01.github.io/Ghostty-wall/ . Site-only pushes do not trigger the tool release workflow; it runs only for `v1.*` tags.
+GitHub Actions regenerates and publishes `website/dist/` to project Pages on pushes to `main` that change the site, `Cargo.toml`, README or Pages workflow. Documentation corrections need no version bump or release tag; a Pages deployment can keep the same product version. Set **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. URL: https://giovannicaiazzo01.github.io/Ghostty-wall/ . Site-only pushes do not trigger the tool release workflow; it runs only for `v1.*` tags.
 
 To host elsewhere, publish the contents of `dist/` under any path. Keep page directories and assets together. No Node.js installation or build step is required. The release badge uses GitHub’s public API; fonts are loaded from Google Fonts. These features need an internet connection.
