@@ -6,6 +6,10 @@ Set a Ghostty wallpaper, generate matching terminal colors, and save looks you c
 
 *Real Ghostty window using the bundled `welcome` profile.*
 
+![Ghostty Wall TUI with the welcome profile selected](media/screenshots/profile-browser.png)
+
+*Profile browser running in Ghostty. Internal preview, not live Ghostty reload.*
+
 ## Install — Linux x86_64
 
 Requires Ghostty, Bash, curl, tar and sha256sum. No Rust toolchain needed.
@@ -32,14 +36,7 @@ The first two commands try the bundled wallpaper. `create` lets you generate a w
 
 Run `ghostty-wall` to browse your saved looks. Select a profile to preview it; choose **Use** to apply it. Editor and browser samples are internal previews, not live Ghostty reload.
 
-<details>
-<summary>See the profile browser</summary>
-
-![Ghostty Wall profile browser with the welcome profile selected](media/screenshots/profile-browser.png)
-
 [Watch the short browser walkthrough](media/screenshots/profile-browser.gif) (captured frames from a real Ghostty window; internal previews, not live wallpaper switching).
-
-</details>
 
 ## Useful commands
 
