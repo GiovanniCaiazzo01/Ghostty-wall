@@ -198,6 +198,28 @@ pub(super) fn run(
                 }
                 screen.redraw()?;
             }
+            Input::Command(command @ ('S' | 'E' | 'C' | 'Z')) => {
+                view.status = match sources::tui(
+                    command,
+                    browser.selected_source().cloned(),
+                    screen.terminal.backend_mut(),
+                ) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let report = format!("Source maintenance failed: {error}");
+                        details(screen.terminal.backend_mut(), &report)?;
+                        report
+                    }
+                };
+                if matches!(command, 'E' | 'Z') {
+                    let selected = browser.selected_profile().cloned();
+                    if let Err(error) = reload_list(application, browser, seed, selected.as_ref()) {
+                        view.status.push_str(&format!("\nRefresh failed: {error}"));
+                    }
+                    refresh(application, browser, &mut view, &mut previews);
+                }
+                screen.redraw()?;
+            }
             Input::Command('o') => {
                 view.status = maintenance::source(screen.terminal.backend_mut())
                     .unwrap_or_else(|error| error.to_string());

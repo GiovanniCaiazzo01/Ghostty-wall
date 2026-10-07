@@ -46,6 +46,10 @@ pub(crate) const ACTIONS: &[(char, &str)] = &[
     ('W', "Add welcome Profile (confirm)"),
     ('Y', "Preview legacy migration (dry-run)"),
     ('M', "Migrate legacy configuration (confirm)"),
+    ('S', "Show Source / dependent Profiles"),
+    ('E', "Edit Source (confirm)"),
+    ('C', "Check Source availability"),
+    ('Z', "Remove unused Source (confirm)"),
     ('X', "Uninstall integration (confirm)"),
 ];
 
@@ -70,7 +74,7 @@ pub(crate) fn input(key: KeyEvent, _mode: BrowserMode) -> Input {
         KeyCode::Tab => Input::Action(BrowserAction::NextPane),
         KeyCode::Enter | KeyCode::Char('p') => Input::Action(BrowserAction::Preview),
         KeyCode::Char('a') => Input::Command('a'),
-        KeyCode::Char(c) if "Nnmoefrdxhstcw?iv".contains(c) => Input::Command(c),
+        KeyCode::Char(c) if "Nnmoefrdxhstcw?ivSECZ".contains(c) => Input::Command(c),
         _ => Input::Ignore,
     }
 }
