@@ -13,24 +13,23 @@ Baseline: [v1.2.0 source at `3ee4f21`](https://github.com/GiovanniCaiazzo01/Ghos
 | 3 | [Apply the prepared preview result](03-preview-apply.md) | `fix/spec-03-preview-apply` | 01 for the shared completion flow |
 | 4 | [Assess readability on the composed wallpaper](04-wallpaper-readability.md) | `feat/spec-04-wallpaper-readability` | 01 and 03 for the draft/confirmation path |
 
-`docs/product-specs` contains the common documentation commit. The four implementation branches initially point to that same commit; no implementation is included. They are local branches, not published branches or PRs.
+Use the [release plan (#7)](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/7) and its linked issues for current implementation and review status. The branch names above are working names; create a missing branch from an up-to-date `main`. The shared specification documents are included in [PR #13](https://github.com/GiovanniCaiazzo01/Ghostty-wall/pull/13), alongside the Spec 01 implementation.
 
 ## Work one spec at a time
 
-1. Review and merge the documentation branch through the normal project workflow.
+1. Read the selected spec and check the release plan for current scope, dependencies and existing work.
 2. Open or link a [GitHub issue](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues) for the selected spec. Issues remain the public execution tracker; these documents define scope, not a second status board.
-3. Switch to its implementation branch and merge the latest `main` before starting. Do this again for each subsequent spec so completed dependencies are present. Do not reset or overwrite work already on a branch.
+3. Create its implementation branch from an up-to-date `main`, or switch to an existing branch and merge the latest `main`. Do this for each subsequent spec so completed dependencies are present. Do not reset or overwrite work already on a branch.
 4. Recheck the baseline and run upstream GitNexus impact analysis before source edits. The risk notes below are planning evidence, not authorization to skip a fresh check.
 5. Add the smallest regression that fails for the stated problem. Reuse the existing Rust tests and disposable-HOME PTY tests; do not add a test framework.
 6. Implement only that spec. Update relevant CLI help, user documentation, examples, and website content for shipped behavior.
 7. Run its focused checks, then the applicable CI gates. Run complete GitNexus change analysis before committing. A partial/truncated graph result is not a clean check.
 8. Submit one implementation PR for that spec and link its issue and acceptance evidence. Start the next dependent spec after the previous work is merged.
 
-For example, with a clean working tree:
+For example, to start Spec 02 with a clean, up-to-date checkout when its branch does not yet exist:
 
 ```bash
-git switch feat/spec-01-editor-actions
-git merge main
+git switch -c feat/spec-02-source-management main
 ```
 
 ## Shared constraints
@@ -41,11 +40,11 @@ git merge main
 - Preserve state locking, conflict checks, bounded reads, atomic publication, and ownership-aware rollback. Never turn an uncertain publication into a blind retry.
 - Keep terminal restoration, small-window behavior, `NO_COLOR`, and non-terminal interaction working.
 - No desktop theming, separate GUI, marketplace, new palette backend, or automatic migration in this tranche.
-- This documentation-only change needs no version bump or release tag.
+- Editing these specification documents alone needs no version bump or release tag.
 
 ## Planning risk
 
-The graph index is six commits behind the baseline, but there are no source changes in that interval. These findings describe prospective source changes, not changes made by this documentation branch.
+This table records the initial planning analysis against the v1.2.0 baseline. It is historical context; rerun impact analysis before changing source.
 
 | Seam | Graph risk | Callers / affected paths | Planning constraint |
 | --- | --- | --- | --- |
