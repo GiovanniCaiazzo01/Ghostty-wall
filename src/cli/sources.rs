@@ -213,7 +213,7 @@ impl Snapshot {
         }
         let config = parse_config_toml(revised)?;
         users(&root, &config, &self.id)?;
-        atomic_intent_edit(&path, revised.as_bytes())
+        atomic_intent_edit_if_unchanged(&path, revised.as_bytes(), self.original.as_bytes())
     }
 }
 

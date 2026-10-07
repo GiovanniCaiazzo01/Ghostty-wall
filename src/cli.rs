@@ -1208,7 +1208,21 @@ fn command_edit(args: &[String], output: &mut impl Write) -> Result<(), CliError
 }
 
 fn atomic_intent_edit(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    match crate::init::atomic_edit(path, path, bytes) {
+    intent_edit_result(crate::init::atomic_edit(path, path, bytes))
+}
+
+fn atomic_intent_edit_if_unchanged(
+    path: &Path,
+    bytes: &[u8],
+    expected: &[u8],
+) -> Result<(), CliError> {
+    intent_edit_result(crate::init::atomic_edit_if_unchanged(
+        path, path, bytes, expected,
+    ))
+}
+
+fn intent_edit_result(result: Result<(), crate::init::InitError>) -> Result<(), CliError> {
+    match result {
         Err(crate::init::InitError::HookPublicationUncertain { path, source }) => {
             Err(CliError::Intent(format!(
                 "Intent edit at {} may already be published; inspect before retrying: {source}",
