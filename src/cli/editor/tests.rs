@@ -117,6 +117,80 @@ fn groups_confirmation_and_small_sample_layout_are_readable() {
 }
 
 #[test]
+fn completion_controls_stay_visible_in_compact_editor_and_sample() {
+    let (_temp, editor) = editor();
+    for sample in [false, true] {
+        let screen = render(
+            40,
+            12,
+            &editor,
+            &View {
+                sample,
+                ..View::default()
+            },
+        );
+        for label in ["s Save", "u Save and use", "Esc/q Cancel", "v details"] {
+            assert!(screen.contains(label), "missing {label}: {screen}");
+        }
+    }
+    for group in 0..3 {
+        let rows = controls(group);
+        assert!(matches!(
+            rows[rows.len() - 3].1,
+            Control::Complete(Completion::Save)
+        ));
+        assert!(matches!(
+            rows[rows.len() - 2].1,
+            Control::Complete(Completion::SaveAndUse)
+        ));
+        assert!(matches!(
+            rows[rows.len() - 1].1,
+            Control::Complete(Completion::Cancel)
+        ));
+    }
+}
+
+#[test]
+fn outcome_reports_separate_save_apply_and_reload_with_details() {
+    use crate::{
+        plan::ReloadUnavailableReason,
+        runtime::{ReloadFailure, ReloadOutcome},
+    };
+    let id = "sample".parse().unwrap();
+    assert!(saved_report(&id).starts_with("Profile saved."));
+    let activation = crate::domain::ActivationId::new(1).unwrap();
+    for (reload, message, detail) in [
+        (
+            ReloadOutcome::Succeeded,
+            "Configuration updated; reload requested.",
+            "visible change is not verified",
+        ),
+        (
+            ReloadOutcome::Failed(ReloadFailure::Reload),
+            "Configuration updated; reload Ghostty manually.",
+            "Failed(Reload)",
+        ),
+        (
+            ReloadOutcome::Unavailable(ReloadUnavailableReason::AdapterCommandUnavailable),
+            "Configuration updated; reload Ghostty manually.",
+            "AdapterCommandUnavailable",
+        ),
+    ] {
+        let report = activation_report(activation, reload, Some(&id));
+        assert!(report.starts_with(message));
+        assert!(report.contains(detail));
+    }
+    let error = CliError::from(WorkflowError::Apply("uncertain commit; inspect".into()));
+    assert!(
+        error
+            .to_string()
+            .starts_with("Profile saved; applying failed. See details.")
+    );
+    assert!(error.to_string().contains("uncertain commit; inspect"));
+    assert_eq!(error.exit_code(), 6);
+}
+
+#[test]
 fn cancellation_reports_uncertain_save_instead_of_claiming_nothing_was_saved() {
     let error = WorkflowError::PublicationUncertain {
         path: PathBuf::from("profiles/boy.toml"),
@@ -126,5 +200,5 @@ fn cancellation_reports_uncertain_save_instead_of_claiming_nothing_was_saved() {
     assert_eq!(result.exit_code(), 6);
     assert!(result.to_string().contains("durability is uncertain"));
     assert!(!result.to_string().contains("no files changed"));
-    assert!(!cancel_result(None).unwrap());
+    assert_eq!(cancel_result(None).unwrap(), Completion::Cancel);
 }

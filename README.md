@@ -34,7 +34,7 @@ ghostty-wall create
 
 The first two commands try the bundled wallpaper. `create` lets you generate a wallpaper or choose your own PNG/JPEG, then save and optionally use it. If Ghostty does not change, reload its configuration manually.
 
-Run `ghostty-wall` to browse your saved looks. Select a profile to preview it; choose **Use** to apply it. Editor and browser samples are internal previews, not live Ghostty reload.
+Run `ghostty-wall` to browse your saved looks. Select a profile to preview it; choose **Use** to apply it. Create/Edit drafts offer `s` **Save** without applying, `u` **Save and use** with confirmation, and Esc/`q` **Cancel**. Editor and browser samples are internal previews, not live Ghostty reload.
 
 [Watch the short browser walkthrough](media/screenshots/profile-browser.gif) (captured frames from a real Ghostty window; internal previews, not live wallpaper switching).
 

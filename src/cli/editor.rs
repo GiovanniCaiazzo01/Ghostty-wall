@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListState, Paragraph, Wrap},
 };
 
-const EDIT_HELP: &str = "Usage: ghostty-wall edit [PROFILE]\n\nOpen a keyboard visual draft editor, or select a Profile when omitted.\nRequires an interactive terminal; a missing named Profile is an error.\nTab switches Wallpaper / Colors / Terminal. Up/Down selects a control.\nLeft/Right increments numbers or cycles choices; Enter opens exact numeric\nentry or a color picker. Color picker: arrows choose a sample, Enter accepts,\nh enters exact #RRGGBB, a resets one slot to Automatic.\nWallpaper: Replace image opens a full-screen Downloads/Pictures picker;\nGenerate another wallpaper is explicit. Customized colors survive replacement.\nGenerated colors: only edited slots become Customized; others stay Automatic.\nCustomizing version 1 generated colors saves as version 2.\nUnmanaged colors stay unmanaged until you explicitly enable automatic colors.\n\ns opens Save and use confirmation (default: Back to editor); declining keeps\nthe draft. Esc/q cancels. p toggles the internal sample on small terminals.\nNo Profile, Projection or History writes happen before confirmed Save and use.\nThe internal sample is approximate, NOT live Ghostty reload. Save and apply\nare separate transactions; reload acceptance is not proof of visible change.\nA failed save retains the draft; uncertain publication requires inspection.\n\nAdvanced: edit PROFILE FIELD VALUE saves immediately without applying.\nSee the user guide for supported field names. update updates the program only.\n";
+const EDIT_HELP: &str = "Usage: ghostty-wall edit [PROFILE]\n\nOpen a keyboard visual draft editor, or select a Profile when omitted.\nRequires an interactive terminal; a missing named Profile is an error.\nTab switches Wallpaper / Colors / Terminal. Up/Down selects a control.\nLeft/Right increments numbers or cycles choices; Enter opens exact numeric\nentry or a color picker. Color picker: arrows choose a sample, Enter accepts,\nh enters exact #RRGGBB, a resets one slot to Automatic.\nWallpaper: Replace image opens a full-screen Downloads/Pictures picker;\nGenerate another wallpaper is explicit. Customized colors survive replacement.\nGenerated colors: only edited slots become Customized; others stay Automatic.\nCustomizing version 1 generated colors saves as version 2.\nUnmanaged colors stay unmanaged until you explicitly enable automatic colors.\n\ns saves without applying. u opens Save and use confirmation\n(default: Back to editor); declining keeps the draft. Esc/q cancels. p toggles the internal\nsample on small terminals. Save and Save and use publish the Profile; Cancel\nwrites nothing. Save alone never changes Projection, History or reloads.\nThe internal sample is approximate, NOT live Ghostty reload. Save and apply\nare separate transactions; reload acceptance is not proof of visible change.\nA failed save retains the draft; uncertain publication requires inspection.\n\nAdvanced: edit PROFILE FIELD VALUE saves immediately without applying.\nSee the user guide for supported field names. update updates the program only.\n";
 
 pub(super) fn command(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
     let report = flow(args, output, false)?;
@@ -89,15 +89,17 @@ pub(super) fn flow(
         image,
         history.latest().cloned(),
     )?;
-    if !edit_loop(output, &paths, &workflow, &mut editor)? {
+    let completion = edit_loop(output, &paths, &workflow, &mut editor)?;
+    if completion == Completion::Cancel {
         return Ok("Cancelled; draft discarded. No Profile saved; terminal and History unchanged by editor.\n".into());
     }
     let id = editor.draft().id();
-    let mut report = Vec::new();
-    if embedded {
-        writeln!(report, "Saved Profile {id}. Applying separately...")?;
-    } else {
-        writeln!(output, "Saved Profile {id}. Applying separately...")?;
+    if completion == Completion::Save {
+        return Ok(saved_report(id));
+    }
+    let saved = format!("Saved Profile {id}. Applying separately...\n");
+    if !embedded {
+        write_text(output, &saved)?;
     }
     let outcome = workflow.use_saved(id, |id| {
         let still_random = matches!(
@@ -109,21 +111,7 @@ pub(super) fn flow(
         );
         Application::load(if still_random { seed } else { None })?.apply(id)
     })?;
-    if let crate::profile_workflow::ProfileOutcome::SavedAndApplied { activation, reload } = outcome
-    {
-        writeln!(report, "Activated {activation} for Profile {id}.")?;
-        let status = match reload {
-            crate::runtime::ReloadOutcome::Succeeded => {
-                "action accepted; visible change is not verified"
-            }
-            crate::runtime::ReloadOutcome::Unavailable(_) => {
-                "unavailable; Activation remains committed"
-            }
-            crate::runtime::ReloadOutcome::Failed(_) => "failed; Activation remains committed",
-        };
-        writeln!(report, "Ghostty reload: {status}.")?;
-    }
-    Ok(String::from_utf8_lossy(&report).into_owned())
+    Ok(format!("{}{saved}", completion_report(id, outcome)))
 }
 
 pub(super) fn random_seed() -> Result<crate::domain::Sha256Digest, CliError> {
@@ -236,8 +224,16 @@ enum Control {
     Color(usize),
     Number(NumericControl),
     Choice(&'static str, &'static str, &'static [&'static str]),
-    Save,
+    Complete(Completion),
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Completion {
+    Save,
+    SaveAndUse,
+    Cancel,
+}
+
 fn controls(group: usize) -> Vec<(String, Control)> {
     let mut rows: Vec<(String, Control)> = match group {
         0 => vec![
@@ -319,7 +315,14 @@ fn controls(group: usize) -> Vec<(String, Control)> {
             ),
         ],
     };
-    rows.push(("Save and use".into(), Control::Save));
+    rows.extend([
+        ("Save".into(), Control::Complete(Completion::Save)),
+        (
+            "Save and use".into(),
+            Control::Complete(Completion::SaveAndUse),
+        ),
+        ("Cancel".into(), Control::Complete(Completion::Cancel)),
+    ]);
     rows
 }
 
@@ -347,7 +350,7 @@ fn edit_loop(
     paths: &InitPaths,
     workflow: &ProfileWorkflows,
     editor: &mut ProfileEditor,
-) -> Result<bool, CliError> {
+) -> Result<Completion, CliError> {
     let mut view = View::default();
     let mut screen = Screen::open(output)?;
     let mut thumbnail = thumbnail(editor);
@@ -369,6 +372,7 @@ fn edit_loop(
             }
             continue;
         }
+        let mut completion = None;
         let result: Result<(), WorkflowError> = match &mut view.mode {
             Mode::Confirm(use_now) => {
                 match key.code {
@@ -387,31 +391,9 @@ fn edit_loop(
                         view.status = "Back to editor; draft intact.".into();
                         continue;
                     }
-                    if uncertain_save.is_some() {
-                        view.mode = Mode::Browse;
-                        view.status = "Save blocked: inspect uncertain publication before reopening; draft retained until exit.".into();
-                        continue;
-                    }
-                    match workflow.save_draft(editor.draft()) {
-                        Ok(_) => return Ok(true),
-                        Err(error) => {
-                            view.mode = Mode::Browse;
-                            if matches!(
-                                error,
-                                WorkflowError::PublicationUncertain { .. }
-                                    | WorkflowError::RollbackIncomplete { .. }
-                            ) {
-                                view.status =
-                                    format!("{error}. Draft retained; no apply attempted.");
-                                uncertain_save = Some(error);
-                                continue;
-                            }
-                            Err(error)
-                        }
-                    }
-                } else {
-                    Ok(())
+                    completion = Some(Completion::SaveAndUse);
                 }
+                Ok(())
             }
             Mode::ResetColors => {
                 if key.code == KeyCode::Char('y') {
@@ -507,7 +489,8 @@ fn edit_loop(
                     }
                     KeyCode::Home => view.row = 0,
                     KeyCode::End => view.row = rows.len() - 1,
-                    KeyCode::Char('s') => view.mode = Mode::Confirm(false),
+                    KeyCode::Char('s') => completion = Some(Completion::Save),
+                    KeyCode::Char('u') => view.mode = Mode::Confirm(false),
                     KeyCode::Char('p') => view.sample = !view.sample,
                     KeyCode::Char('v') => {
                         management::details(screen.terminal.backend_mut(), &view.status)?;
@@ -523,8 +506,15 @@ fn edit_loop(
                 );
                 let increase = matches!(key.code, KeyCode::Right | KeyCode::Char('+'));
                 match control {
-                    Control::Save if enter => {
+                    Control::Complete(Completion::Cancel) if enter => {
+                        return cancel_result(uncertain_save);
+                    }
+                    Control::Complete(Completion::SaveAndUse) if enter => {
                         view.mode = Mode::Confirm(false);
+                        Ok(())
+                    }
+                    Control::Complete(Completion::Save) if enter => {
+                        completion = Some(Completion::Save);
                         Ok(())
                     }
                     Control::AutomaticColors if enter => {
@@ -574,14 +564,34 @@ fn edit_loop(
         if let Err(error) = result {
             view.status = format!("Draft retained. {error}");
         }
+        if let Some(completion) = completion {
+            view.mode = Mode::Browse;
+            if uncertain_save.is_some() {
+                view.status = "Save blocked: inspect uncertain publication before reopening; draft retained until exit.".into();
+                continue;
+            }
+            match workflow.save_draft(editor.draft()) {
+                Ok(_) => return Ok(completion),
+                Err(error) => {
+                    view.status = format!("Draft retained. {error}; no apply attempted.");
+                    if matches!(
+                        error,
+                        WorkflowError::PublicationUncertain { .. }
+                            | WorkflowError::RollbackIncomplete { .. }
+                    ) {
+                        uncertain_save = Some(error);
+                    }
+                }
+            }
+        }
     }
 }
 
 // Cancellation must not relabel an uncertain earlier save as "no files changed".
-fn cancel_result(uncertain: Option<WorkflowError>) -> Result<bool, CliError> {
+fn cancel_result(uncertain: Option<WorkflowError>) -> Result<Completion, CliError> {
     match uncertain {
         Some(error) => Err(error.into()),
-        None => Ok(false),
+        None => Ok(Completion::Cancel),
     }
 }
 
@@ -649,13 +659,7 @@ fn draw(
         .constraints([
             Constraint::Length(if wide { 3 } else { 2 }),
             Constraint::Min(1),
-            Constraint::Length(if compact_sample {
-                2
-            } else if wide {
-                4
-            } else {
-                3
-            }),
+            Constraint::Length(if wide { 4 } else { 3 }),
         ])
         .split(frame.area());
     let group = ["Wallpaper", "Colors", "Terminal"][view.group];
@@ -664,7 +668,7 @@ fn draw(
             "Edit Profile {} · {group}\n{}",
             editor.draft().id(),
             if wide {
-                "Tab: Wallpaper / Colors / Terminal · s: Save and use"
+                "Tab: Wallpaper / Colors / Terminal · s Save · u Save and use"
             } else {
                 "Tab: Wallpaper / Colors / Terminal"
             }
@@ -725,14 +729,13 @@ fn draw(
     }
     let footer = if wide {
         format!(
-            "↑↓ select · ←→ adjust · Enter edit · Esc/q cancel · p sample\nInternal preview only — NOT live Ghostty reload\n{}",
+            "s Save · u Save and use · Esc/q Cancel · p sample · v details\n↑↓ select · ←→ adjust · Enter edit · NOT live Ghostty reload\n{}",
             view.status
         )
-    } else if compact_sample {
-        "p controls · s Save · Esc/q cancel\nInternal; NOT live Ghostty reload".into()
     } else {
         format!(
-            "↑↓ select · ←→ adjust · Enter edit\ns Save · p sample · Esc/q cancel\nv: {}",
+            "s Save · u Save and use · Esc/q Cancel\n↑↓/←→ · Enter · p {} · v details\n{}",
+            if compact_sample { "controls" } else { "sample" },
             if view.status.is_empty() {
                 "NOT live Ghostty reload"
             } else {

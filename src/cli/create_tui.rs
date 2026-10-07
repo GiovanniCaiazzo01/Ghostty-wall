@@ -23,7 +23,10 @@ enum Step {
     Review {
         generated: bool,
     },
-    Use,
+    Confirm {
+        generated: bool,
+        use_now: bool,
+    },
 }
 
 #[derive(Default)]
@@ -46,15 +49,19 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
             .terminal
             .draw(|frame| draw(frame, &form, sample.as_ref()))?;
         let key = editor::key()?;
-        if editor::interrupt(key) || key.code == KeyCode::Esc {
-            return Ok(if matches!(form.step, Step::Use) {
-                (
-                    draft.as_ref().map(|d| d.draft().id().clone()),
-                    "Profile saved; Not now. Terminal unchanged.".into(),
-                )
-            } else {
-                (None, "Creation cancelled; no Profile saved.".into())
-            });
+        if editor::interrupt(key) {
+            return Ok((None, "Creation cancelled; no Profile saved.".into()));
+        }
+        if key.code == KeyCode::Esc {
+            if let Step::Confirm { generated, .. } = form.step {
+                form.step = Step::Review { generated };
+                form.status = "Back to editor; draft intact.".into();
+                continue;
+            }
+            return Ok((None, "Creation cancelled; no Profile saved.".into()));
+        }
+        if key.code == KeyCode::Char('q') && !matches!(form.step, Step::Name) {
+            return Ok((None, "Creation cancelled; no Profile saved.".into()));
         }
         let size = screen.terminal.size()?;
         if tui::needs_resize(size.width, size.height) {
@@ -95,6 +102,7 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
         let Some(draft) = draft.as_mut() else {
             continue;
         };
+        let mut completion = None;
         let result = match form.step {
             Step::Wallpaper if key.code == KeyCode::Char('g') => draft
                 .generate_image(&workflow, editor::random_seed()?)
@@ -115,57 +123,74 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
                 draft.generate_image(&workflow, editor::random_seed()?)
             }
             Step::Review { .. } if key.code == KeyCode::Char('s') => {
-                match workflow.save_draft(draft.draft()) {
-                    Ok(_) => {
-                        form.step = Step::Use;
-                        Ok(())
-                    }
-                    // Do not offer a retry or claim cancellation undoes uncertain publication.
-                    Err(
-                        e @ (WorkflowError::PublicationUncertain { .. }
-                        | WorkflowError::RollbackIncomplete { .. }),
-                    ) => return Err(e.into()),
-                    Err(e) => Err(e),
-                }
+                completion = Some(editor::Completion::Save);
+                Ok(())
+            }
+            Step::Review { generated } if key.code == KeyCode::Char('u') => {
+                form.step = Step::Confirm {
+                    generated,
+                    use_now: false,
+                };
+                continue;
             }
             Step::Review { .. } if key.code == KeyCode::Char('p') => {
                 form.show_sample = !form.show_sample;
                 continue;
             }
-            Step::Use => {
-                let id = draft.draft().id().clone();
-                if matches!(key.code, KeyCode::Enter | KeyCode::Char('n')) {
-                    return Ok((
-                        Some(id.clone()),
-                        format!("Saved Profile {id}; Not now. Terminal unchanged."),
-                    ));
+            Step::Confirm {
+                generated,
+                mut use_now,
+            } => {
+                match key.code {
+                    KeyCode::Left | KeyCode::Right | KeyCode::Tab => use_now = !use_now,
+                    KeyCode::Char('y') => use_now = true,
+                    KeyCode::Char('n') => {
+                        form.step = Step::Review { generated };
+                        form.status = "Back to editor; draft intact.".into();
+                        continue;
+                    }
+                    _ => (),
                 }
-                if key.code == KeyCode::Char('y') {
-                    let outcome =
-                        workflow.use_saved(&id, |id| Application::load(None)?.apply(id))?;
-                    let report = match outcome {
-                        crate::profile_workflow::ProfileOutcome::SavedAndApplied {
-                            activation,
-                            reload,
-                        } => format!(
-                            "Saved Profile {id}. Activated {activation}. Ghostty reload: {}.",
-                            reload_status(reload)
-                        ),
-                        crate::profile_workflow::ProfileOutcome::Saved => {
-                            format!("Saved Profile {id}; terminal unchanged.")
-                        }
-                    };
-                    return Ok((Some(id), report));
+                form.step = Step::Confirm { generated, use_now };
+                if matches!(key.code, KeyCode::Enter | KeyCode::Char('y')) {
+                    form.step = Step::Review { generated };
+                    if !use_now {
+                        form.status = "Back to editor; draft intact.".into();
+                        continue;
+                    }
+                    completion = Some(editor::Completion::SaveAndUse);
                 }
-                continue;
+                Ok(())
             }
             _ => continue,
         };
+        let result = result.and_then(|()| {
+            if completion.is_some() {
+                workflow.save_draft(draft.draft())?;
+            }
+            Ok(())
+        });
         match result {
             Ok(()) => {
+                if let Some(completion) = completion {
+                    let id = draft.draft().id().clone();
+                    let report = if completion == editor::Completion::Save {
+                        saved_report(&id)
+                    } else {
+                        let outcome =
+                            workflow.use_saved(&id, |id| Application::load(None)?.apply(id))?;
+                        format!("{}Saved Profile {id}.\n", completion_report(&id, outcome))
+                    };
+                    return Ok((Some(id), report));
+                }
                 form.status.clear();
                 sample = Some(Sample::new(draft.preview()?, draft.image()));
             }
+            // Do not offer a retry or claim cancellation undoes uncertain publication.
+            Err(
+                e @ (WorkflowError::PublicationUncertain { .. }
+                | WorkflowError::RollbackIncomplete { .. }),
+            ) => return Err(e.into()),
             Err(e) => form.status = format!("{e}. Draft retained."),
         }
     }
@@ -182,7 +207,7 @@ fn draw(frame: &mut Frame, form: &Form, sample: Option<&Sample>) {
     let areas = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(3),
     ])
     .split(frame.area());
     frame.render_widget(
@@ -192,7 +217,7 @@ fn draw(frame: &mut Frame, form: &Form, sample: Option<&Sample>) {
             if form.status.is_empty() {
                 "Internal sample; NOT live Ghostty reload"
             } else {
-                "Error: F1 for details; draft retained"
+                "F1/v for details; draft retained"
             }
         )),
         areas[0],
@@ -200,8 +225,8 @@ fn draw(frame: &mut Frame, form: &Form, sample: Option<&Sample>) {
     let (text, keys) = match form.step {
         Step::Name => (format!("Profile ID: {}_\n1..64 lowercase letters/digits; internal hyphens. Existing ids are never overwritten.", form.name), "Enter next · Esc cancel · F1 error"),
         Step::Wallpaper => ("Starting point\n\ng Generate wallpaper for me\ni Choose my image (Downloads/Pictures)\n\nNothing saved yet.".into(), "g Generate · i Image · Esc cancel\nF1 error details"),
-        Step::Review { generated } => (format!("Review {}\nWallpaper + generated colors\nText, ANSI, cursor and selection\n\ns Save complete Profile\n{}\nNothing saved yet.", form.name, if generated { "a Another variant (before Save only)" } else { "Original image stays untouched." }), if generated { "s Save · a Another variant\np sample/form · Esc cancel · v error" } else { "s Save · p sample/form\nEsc cancel · v error" }),
-        Step::Use => (format!("Saved Profile {}.\nNo Activation yet.\n\ny Use now\nn Not now (default)\n\nReload is best-effort, not verified visible change.", form.name), "y Use now · Enter/n/Esc Not now"),
+        Step::Review { generated } => (format!("Review {}\nWallpaper + generated colors\nText, ANSI, cursor and selection\n\ns Save complete Profile without applying\nu Save and use (confirm)\n{}\nNothing saved yet.", form.name, if generated { "a Another variant (before Save only)" } else { "Original image stays untouched." }), if generated { "s Save · u Save and use · Esc/q Cancel\na Another variant · p sample/form\nv details" } else { "s Save · u Save and use · Esc/q Cancel\np sample/form · v details" }),
+        Step::Confirm { use_now, .. } => (format!("Save and use Profile {}?\nSave changes, then apply once.\n{}\nNothing saved yet.", form.name, if use_now { "Back to editor    [Save and use]" } else { "[Back to editor]    Save and use" }), "←→ choose · Enter confirm · y yes\nn/Esc back"),
     };
     let wide = frame.area().width >= 90 && frame.area().height >= 18;
     let panes = Layout::default()
@@ -238,9 +263,15 @@ mod tests {
             (Step::Wallpaper, vec!["g Generate", "i Image", "Esc cancel"]),
             (
                 Step::Review { generated: true },
-                vec!["s Save", "p sample/form", "Esc cancel"],
+                vec!["s Save", "u Save and use", "p sample/form", "Esc/q Cancel"],
             ),
-            (Step::Use, vec!["y Use now", "Not now"]),
+            (
+                Step::Confirm {
+                    generated: true,
+                    use_now: false,
+                },
+                vec!["Back to editor", "Enter confirm", "n/Esc back"],
+            ),
         ] {
             let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
             terminal

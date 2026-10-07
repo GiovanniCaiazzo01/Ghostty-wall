@@ -855,7 +855,9 @@ fn assert_cli_reload_failure_preserves_activation(route: &str) {
         let committed = snapshot(&f.root.join("history/activations"));
         let output = run(args);
         let text = String::from_utf8(output.stdout).unwrap();
-        assert!(text.contains("unavailable or failed; Activation remains committed"));
+        assert!(text.starts_with("Configuration updated; reload Ghostty manually."));
+        assert!(text.contains("Activation remains committed"));
+        assert!(text.contains("Reload details:"));
         assert!(!text.contains("reload: succeeded"));
         let history = inspect_history(&f.root).unwrap();
         assert_eq!(history.latest().unwrap().sequence(), sequence);
@@ -1004,7 +1006,8 @@ fn delivered_other_profile_draft_then_failed_cancel_restores_legacy_files_not_ve
         let applied = f.ok(&["apply", "legacy"]);
         let text = String::from_utf8(applied.stdout).unwrap();
         assert!(text.contains("Activated act-v1-0000000000000001"));
-        assert!(text.contains("unavailable or failed; Activation remains committed"));
+        assert!(text.starts_with("Configuration updated; reload Ghostty manually."));
+        assert!(text.contains("unavailable; Activation remains committed"));
         let plan: serde_json::Value =
             serde_json::from_slice(&f.ok(&["plan", "boy", "--json"]).stdout).unwrap();
         assert_eq!(plan["profile"]["schema_version"], 1);
