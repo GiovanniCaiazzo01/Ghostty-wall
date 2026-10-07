@@ -55,4 +55,8 @@ ghostty-wall uninstall      # Remove integration; keep profiles and history
 - [Advanced behavior and safety notes](docs/advanced-usage.md)
 - [Changelog](CHANGELOG.md)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch conventions, PR descriptions and development checks. Pick a task from the [release plan and roadmap](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/7), or open an issue to discuss a larger change.
+
 MIT — see [LICENSE](LICENSE).
