@@ -20,8 +20,8 @@ ghostty-wall create night
 
 Choose **Generate** or **Image**, review the result, then **Save**.
 
-- **Use now** applies the saved profile.
-- **Not now** saves it without changing Ghostty.
+- Standalone prompts retain **Use now** / **Not now** after Save; **Not now** is the default and leaves Ghostty unchanged.
+- Full-screen Create offers `s` **Save**, `u` **Save and use**, and Esc/`q` **Cancel**. Save and use defaults to **Back to editor**; declining retains the draft.
 - Cancelling before Save leaves no profile.
 - Generated wallpaper stays fixed after saving. **Another variant** changes only an unsaved draft.
 
@@ -53,9 +53,17 @@ ghostty-wall edit night
 
 The visual editor groups controls into **Wallpaper**, **Colors**, and **Terminal**. It supports image replacement, color samples, exact hex values, and numeric settings.
 
-Choose **Save and use** to save and apply. Confirmation is required; declining returns to your draft. Esc or `q` discards the draft.
+Create and visual Edit share these completion choices, also on compact layouts:
 
-**Saving, applying, and reloading are separate steps.** A saved profile may remain if applying fails. Applying records history before requesting a best-effort Ghostty reload; a failed reload does not undo that record. Reload Ghostty manually if the visible result has not changed.
+| Key | Outcome |
+| --- | --- |
+| `s` — **Save** | Publish the recipe and any staged image; finish without applying or reloading. |
+| `u` — **Save and use** | Confirm, save, then apply once. Enter defaults to **Back to editor**; `n`/Esc also retains the draft. |
+| Esc/`q` — **Cancel** | Discard unsaved changes without publishing a Profile or image. |
+
+A definite save failure retains the draft; correct the cause and retry. Concurrent Profile/Source edits require reopening. Uncertain publication or incomplete rollback requires inspection, not a retry; cancellation cannot undo uncertain publication. `v` opens full editor error details.
+
+**Saving, applying, and reloading are separate steps.** Completion reports say **Profile saved.**, **Profile saved; applying failed. See details.**, **Configuration updated; reload requested.**, or **Configuration updated; reload Ghostty manually.** Apply failure leaves the saved Profile available, but uncertain apply effects require inspection. Applying records history before requesting best-effort reload; failed reload does not undo that record. Activation IDs and reload reasons remain in detailed output (`v` in the browser). Accepted reload requests do not prove a visible change; reload Ghostty manually if needed.
 
 For scripts or a single setting, use the field form:
 

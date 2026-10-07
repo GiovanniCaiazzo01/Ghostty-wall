@@ -113,11 +113,9 @@ pub(super) fn run(
                         application.apply(id)
                     });
                 view.status = match result {
-                    Ok(outcome) => format!(
-                        "Profile applied. Ghostty reload: {}.\nActivated {}.",
-                        reload_status(outcome.reload_outcome()),
-                        outcome.activation_id()
-                    ),
+                    Ok(outcome) => {
+                        activation_report(outcome.activation_id(), outcome.reload_outcome(), None)
+                    }
                     Err(e) => e.to_string(),
                 };
                 // Use already resolves again. Retain the inspected sample rather than

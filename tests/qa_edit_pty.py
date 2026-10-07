@@ -91,7 +91,7 @@ class EditFixture(unittest.TestCase):
         self.assertNotIn(ALT_LEAVE, session.data)
 
     def save(self, session):
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         session.send("y")
         session.wait(b"Saved Profile boy.")
@@ -142,7 +142,7 @@ class EditPublicPath(EditFixture):
         session.wait(b"Select Profile to edit")
         session.send(DOWN + "\r")  # active sorts first, then boy.
         session.wait(b"Edit Profile boy")
-        session.send("\t\t" + DOWN + "\r18.125\rs")
+        session.send("\t\t" + DOWN + "\r18.125\ru")
         session.wait(b"Save and use Profile boy?")
         session.send("n")
         session.wait(b"Back to editor; draft intact.")
@@ -174,7 +174,7 @@ class EditPublicPath(EditFixture):
                 session.send("\ra")
             if slot != 20:
                 session.send(DOWN)
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         session.send("n")
         session.wait(b"Back to editor; draft intact.")
@@ -205,7 +205,7 @@ class EditPublicPath(EditFixture):
         session.send(DOWN * 2 + RIGHT + DOWN + LEFT + DOWN + RIGHT + DOWN + RIGHT)
         session.send("\t\t\r0.812345\r" + LEFT + DOWN + "\r14.125\r" + RIGHT)
         session.send(DOWN + RIGHT + DOWN + "\r254\r" + RIGHT)
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         session.send("\r")
         session.wait(b"Back to editor; draft intact.")
@@ -314,13 +314,13 @@ class EditPublicPath(EditFixture):
         session.wait(b"Foreground")
         background = re.search(r"Background\s+#([0-9a-f]{6}) Automatic", session.screen().decode())
         self.assertIsNotNone(background, session.screen())
-        session.send(DOWN * 2 + "\rh#12AB34\rs")
+        session.send(DOWN * 2 + "\rh#12AB34\ru")
         session.wait(b"Save and use Profile boy?")
         session.send("\x1b")
         session.wait(b"Back to editor; draft intact.")
         session.wait(b"Cursor #12ab34 Customized")
         self.assertEqual(self.snapshot(), before)
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         session.send(RIGHT + "\r")
         session.wait(b"Saved Profile boy.")
@@ -365,7 +365,7 @@ class EditPublicPath(EditFixture):
         config = self.root / "config.toml"
         config.write_text(config.read_text() + '\n[sources.external]\nkind = "local-directory"\npath = "outside"\n')
         before = self.snapshot()
-        session.send("sy")
+        session.send("uy")
         session.wait(b"Source registry changed")
         self.assertEqual(self.snapshot(), before)
         self.cancel(session)
@@ -397,7 +397,7 @@ class EditPublication(EditFixture):
         # Unsafe write permissions fail Profile replacement after the image was published.
         # This filesystem fault works even when the test runner has elevated privileges.
         self.profile.chmod(0o622)
-        session.send("sy")
+        session.send("uy")
         session.wait(b"was not saved:")
         self.assertEqual(self.snapshot(), before)
         self.profile.chmod(0o600)
@@ -414,7 +414,7 @@ class EditPublication(EditFixture):
         session = self.open()
         self.replace(session)
         self.profile.chmod(0o622)
-        session.send("sy")
+        session.send("uy")
         session.wait(b"was not saved:")
         self.assertEqual(self.snapshot(), before)
         self.cancel(session)
@@ -429,9 +429,9 @@ class EditPublication(EditFixture):
                                             GW_QA_SYNC_DIRECTORY=str(self.root / "profiles"),
                                             GW_QA_FAIL_SYNC=str(sync_number)))
                 self.replace(session)
-                session.send("sy")
+                session.send("uy")
                 session.wait(b"Publication at")
-                session.send("sy")
+                session.send("uy")
                 session.wait(b"Save blocked:")
                 self.assertEqual({k: v for k, v in self.snapshot().items() if k.parts[0] != "profiles"},
                                  {k: v for k, v in before.items() if k.parts[0] != "profiles"})

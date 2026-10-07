@@ -99,6 +99,26 @@ class EditPty(unittest.TestCase):
         session.wait(ALT_ENTER, timeout=30)
         return session
 
+    def test_save_only_after_decline_publishes_draft_without_activation_or_reload(self):
+        before = self.snapshot()
+        hook = self.home / "config/ghostty/config.ghostty"
+        integration = hook.read_bytes()
+        session = self.session("boy")
+        session.wait(b"Edit Profile boy")
+        session.send("\t\t\x1b[B\r19.125\ru")
+        session.wait(b"Save and use Profile boy?")
+        session.send("\r")
+        session.wait(b"Back to editor; draft intact.")
+        self.assertEqual(self.snapshot(), before)
+        session.send("s")
+        session.wait(b"Profile saved.")
+        session.finish()
+        after = self.snapshot()
+        self.assertIn(b"font_size = 19.125", after.pop(Path("profiles/boy.toml")))
+        before.pop(Path("profiles/boy.toml"))
+        self.assertEqual(after, before)
+        self.assertEqual(hook.read_bytes(), integration)
+
     def test_small_picker_exposes_complete_selected_long_path_without_leaving_editor(self):
         downloads = self.home / "Downloads"
         downloads.mkdir()
@@ -150,7 +170,7 @@ class EditPty(unittest.TestCase):
         session.send("#AABBCC\r")
         # Terminal background opacity, then Font size: step and direct entry.
         session.send("\t\r0.812345\r\x1b[B\x1b[C\x1b[D\r14.125\r")
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         self.assertEqual(self.snapshot(), before)
         session.send("\r")  # Confirmation defaults to Back, never Save.
@@ -169,11 +189,11 @@ class EditPty(unittest.TestCase):
         session.wait(b"Edit Profile boy")
         self.assertNotIn(b"\x1b[?1049l", session.data)
         self.assertEqual(self.snapshot(), before)
-        session.send("s")
+        session.send("u")
         session.wait(b"Save and use Profile boy?")
         session.send("n")
         session.wait(b"Back to editor; draft intact.")
-        session.send("sy")
+        session.send("uy")
         session.wait(b"Saved Profile boy.")
         session.wait(b"Ghostty reload: unavailable; Activation remains committed.")
         session.finish()
@@ -207,13 +227,13 @@ class EditPty(unittest.TestCase):
                 session.wait(b"Edit Profile boy")
                 session.send("\t" + "\x1b[B" * 20 + "\rh#12AB34\r")
                 session.wait(b"ANSI palette 15 #12ab34 Customized")
-                session.send("s")
+                session.send("u")
                 session.wait(b"Save and use Profile boy?")
                 session.send("n")
                 session.wait(b"Back to editor; draft intact.")
                 session.wait(b"ANSI palette 15 #12ab34 Customized")
                 self.assertEqual(self.snapshot(), before)
-                session.send("sy")
+                session.send("uy")
                 session.wait(b"Saved Profile boy.")
                 session.wait(b"Ghostty reload: unavailable; Activation remains committed.")
                 session.finish()
@@ -265,7 +285,7 @@ class EditPty(unittest.TestCase):
         path = self.root / "profiles/boy.toml"
         path.write_text(path.read_text() + "\n# external edit\n")
         before = self.snapshot()
-        session.send("sy")
+        session.send("uy")
         session.wait(b"Profile changed during editing")
         session.send("q")
         session.finish()
@@ -277,9 +297,9 @@ class EditPty(unittest.TestCase):
         session.send("\t\t\x1b[B\r17.5\r")
         hook = self.home / "config/ghostty/config.ghostty"
         hook.write_text("# externally removed hook\n")
-        session.send("sy")
+        session.send("uy")
         session.wait(b"Saved Profile boy.")
-        session.wait(b"Profile saved but apply failed")
+        session.wait(b"Profile saved; applying failed. See details.")
         session.proc.wait(timeout=30)
         self.assertEqual(session.proc.returncode, 6)
         self.assertIn("font_size = 17.5", (self.root / "profiles/boy.toml").read_text())

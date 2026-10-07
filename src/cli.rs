@@ -70,7 +70,7 @@ const HELP: &str = concat!(
     "  ghostty-wall new PROFILE --source SOURCE --path CANDIDATE [--apply]\n",
     "  ghostty-wall source add SOURCE local DIRECTORY\n",
     "  ghostty-wall source add SOURCE github OWNER/REPO [--ref REF] [--path PATH]\n",
-    "  ghostty-wall edit [PROFILE]     # visual draft editor; Save and use confirms\n",
+    "  ghostty-wall edit [PROFILE]     # visual draft; Save / Save and use / Cancel\n",
     "  ghostty-wall edit PROFILE FIELD VALUE    # advanced; saves immediately; no live draft\n",
     "  ghostty-wall duplicate PROFILE NEW\n",
     "  ghostty-wall rename PROFILE NEW  # inactive, non-Welcome Profile only\n",
@@ -112,7 +112,10 @@ const CREATE_HELP: &str = concat!(
     "Choices are listed separately; defaults appear in the input question.\n",
     "NO_COLOR disables inline styling; piped input/output stays plain.\n",
     "Run ghostty-wall init first. This command does not provide live draft preview.\n",
-    "TUI: n opens the same workflow with an embedded form and approximate sample.\n"
+    "TUI: n opens an embedded form and approximate sample. s Save finishes without\n",
+    "applying; u Save and use confirms (default: Back to editor); Esc/q Cancel\n",
+    "discards the unsaved draft. Declining confirmation or a definite save failure\n",
+    "retains the draft. v opens details; uncertain publication requires inspection.\n"
 );
 const MAX_INTENT_BYTES: u64 = 1024 * 1024;
 
@@ -378,7 +381,7 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
     presentation::line(
         output,
         presentation::Role::Success,
-        &format!("Saved Profile {id}. No Activation yet."),
+        &format!("Profile saved.\nSaved Profile {id}. No Activation yet."),
     )?;
     loop {
         presentation::choices(
@@ -405,25 +408,7 @@ fn command_create(args: &[String], output: &mut impl Write) -> Result<(), CliErr
             "y" | "yes" | "use now" => {
                 // Loading and applying can fail independently of the already completed save.
                 let outcome = workflow.use_saved(&id, |id| Application::load(None)?.apply(id))?;
-                if let crate::profile_workflow::ProfileOutcome::SavedAndApplied {
-                    activation,
-                    reload,
-                } = outcome
-                {
-                    writeln!(output, "Activated {activation} for Profile {id}.")?;
-                    let status = match reload {
-                        crate::runtime::ReloadOutcome::Succeeded => {
-                            "action accepted; visible change is not verified"
-                        }
-                        crate::runtime::ReloadOutcome::Unavailable(_) => {
-                            "unavailable; Activation remains committed"
-                        }
-                        crate::runtime::ReloadOutcome::Failed(_) => {
-                            "failed; Activation remains committed"
-                        }
-                    };
-                    writeln!(output, "Ghostty reload: {status}.")?;
-                }
+                write_text(output, &completion_report(&id, outcome))?;
                 return Ok(());
             }
             _ => presentation::error(output, "Choose y or n; saved Profile remains.")?,
@@ -1492,7 +1477,7 @@ fn command_tui(
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         return write_text(
             output,
-            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k automatically preview without activating, even while loading.\nCompact layouts show list and sample; Enter/p enlarges the sample.\nTab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, review, Save, then Use now / Not now.\nEdit: Wallpaper/Colors/Terminal, confirmed Save and use, or cancel.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nManagement minimum 60x18 preserves photo space; smaller windows show resize\nguidance (Esc cancels). Create/Edit forms still support 40x12. Compact lists\nelide long IDs; the header shows the selection and * marks the active Profile.\nAll actions, nested image pickers, reports and first-start initialization stay full-screen.\nInput forms: Enter next/submit, Tab/Shift-Tab fields, Ctrl-U clear, Esc cancel.\nInvalid input retains values; F1 shows error details.\nDelete: y confirms, Enter/n/Esc/Ctrl-C cancels; arrows scroll the summary.\nCreate errors: F1 details. Editor/main results: v details.\nGhostty receives a static image behind sample text; other terminals show a\nlabelled color-cell fallback. Wallpaper uses linear-light sRGB (Ghostty's\nLinux default), not inferred native/P3 blending. Saved opacity/RGB are unchanged.\nInherited settings are illustrative; v explains limitations. Preview errors never activate. Random Use resolves again; a\nchanged Source may change the candidate. Local Profile/image changes invalidate\nthe sample. Internal previews are NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings/Source configuration, doctor, init/repair, update and uninstall remain in Actions.\nReports: arrows/PageUp/PageDown scroll, Enter/Esc back. i views the original image.\nMaintenance mutations require y; Enter/n/Esc/Ctrl-C/D declines.\nLong jobs show progress; Esc closes read-only jobs (work may finish in background).\nOnce a mutation starts, wait for completion/recovery; cancellation is unavailable.\nUninstall returns to the browser and preserves Intent/History.\nRestart Ghostty Wall after an installed update; this process keeps its old version.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
+            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k automatically preview without activating, even while loading.\nCompact layouts show list and sample; Enter/p enlarges the sample.\nTab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, then review. Edit: Wallpaper/Colors/Terminal.\nBoth: s Save without applying, u Save and use, Esc/q Cancel.\nSave and use confirms (default: Back to editor); declining keeps the draft.\nA definite save failure retains the draft; uncertainty requires inspection.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nManagement minimum 60x18 preserves photo space; smaller windows show resize\nguidance (Esc cancels). Create/Edit forms still support 40x12. Compact lists\nelide long IDs; the header shows the selection and * marks the active Profile.\nAll actions, nested image pickers, reports and first-start initialization stay full-screen.\nInput forms: Enter next/submit, Tab/Shift-Tab fields, Ctrl-U clear, Esc cancel.\nInvalid input retains values; F1 shows error details.\nDelete: y confirms, Enter/n/Esc/Ctrl-C cancels; arrows scroll the summary.\nCreate errors: F1 details. Editor/main results: v details.\nGhostty receives a static image behind sample text; other terminals show a\nlabelled color-cell fallback. Wallpaper uses linear-light sRGB (Ghostty's\nLinux default), not inferred native/P3 blending. Saved opacity/RGB are unchanged.\nInherited settings are illustrative; v explains limitations. Preview errors never activate. Random Use resolves again; a\nchanged Source may change the candidate. Local Profile/image changes invalidate\nthe sample. Internal previews are NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings/Source configuration, doctor, init/repair, update and uninstall remain in Actions.\nReports: arrows/PageUp/PageDown scroll, Enter/Esc back. i views the original image.\nMaintenance mutations require y; Enter/n/Esc/Ctrl-C/D declines.\nLong jobs show progress; Esc closes read-only jobs (work may finish in background).\nOnce a mutation starts, wait for completion/recovery; cancellation is unavailable.\nUninstall returns to the browser and preserves Intent/History.\nRestart Ghostty Wall after an installed update; this process keeps its old version.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
         );
     }
     let seed = parse_seed_only(args)?;
@@ -2298,18 +2283,42 @@ fn reload_status(outcome: crate::runtime::ReloadOutcome) -> &'static str {
     }
 }
 
-fn print_apply_outcome(outcome: ApplyOutcome, output: &mut impl Write) -> Result<(), CliError> {
-    writeln!(output, "Activated {}.", outcome.activation_id())?;
-    writeln!(
-        output,
-        "Ghostty reload: {}.",
-        if outcome.reload_succeeded() {
-            "succeeded"
-        } else {
-            "unavailable or failed; Activation remains committed"
+fn saved_report(id: &IntentId) -> String {
+    format!("Profile saved.\nSaved Profile {id}.\nTerminal unchanged.\n")
+}
+
+fn activation_report(
+    activation: crate::domain::ActivationId,
+    reload: crate::runtime::ReloadOutcome,
+    profile: Option<&IntentId>,
+) -> String {
+    let message = match reload {
+        crate::runtime::ReloadOutcome::Succeeded => "Configuration updated; reload requested.",
+        _ => "Configuration updated; reload Ghostty manually.",
+    };
+    let profile = profile
+        .map(|id| format!(" for Profile {id}"))
+        .unwrap_or_default();
+    format!(
+        "{message}\nActivated {activation}{profile}.\nGhostty reload: {}.\nReload details: {reload:?}.\n",
+        reload_status(reload)
+    )
+}
+
+fn completion_report(id: &IntentId, outcome: crate::profile_workflow::ProfileOutcome) -> String {
+    match outcome {
+        crate::profile_workflow::ProfileOutcome::Saved => saved_report(id),
+        crate::profile_workflow::ProfileOutcome::SavedAndApplied { activation, reload } => {
+            activation_report(activation, reload, Some(id))
         }
-    )?;
-    Ok(())
+    }
+}
+
+fn print_apply_outcome(outcome: ApplyOutcome, output: &mut impl Write) -> Result<(), CliError> {
+    write_text(
+        output,
+        &activation_report(outcome.activation_id(), outcome.reload_outcome(), None),
+    )
 }
 
 fn removed(value: bool) -> &'static str {
@@ -2392,6 +2401,12 @@ impl std::fmt::Display for CliError {
             Self::Preview(error) => error.fmt(formatter),
             Self::Json(error) => error.fmt(formatter),
             Self::Update(error) => error.fmt(formatter),
+            Self::Workflow(error @ crate::profile_workflow::WorkflowError::Apply(_)) => {
+                write!(
+                    formatter,
+                    "Profile saved; applying failed. See details.\n{error}"
+                )
+            }
             Self::Workflow(error) => error.fmt(formatter),
         }
     }
