@@ -42,6 +42,7 @@ Run `ghostty-wall` to browse your saved looks. Select a profile to preview it; c
 
 ```bash
 ghostty-wall edit           # Customize a saved look
+ghostty-wall source list    # Inspect configured wallpaper sources
 ghostty-wall previous       # Restore the previous look
 ghostty-wall update         # Update Ghostty Wall, not Ghostty
 ghostty-wall uninstall      # Remove integration; keep profiles and history
@@ -52,6 +53,7 @@ ghostty-wall uninstall      # Remove integration; keep profiles and history
 - [Quick start](https://giovannicaiazzo01.github.io/Ghostty-wall/quick-start/)
 - [User guides and command reference](https://giovannicaiazzo01.github.io/Ghostty-wall/)
 - [Troubleshooting and recovery](https://giovannicaiazzo01.github.io/Ghostty-wall/troubleshooting/)
+- [Source maintenance: show, edit, check and safe removal](https://giovannicaiazzo01.github.io/Ghostty-wall/wallpapers/#maintenance)
 - [Advanced behavior and safety notes](docs/advanced-usage.md)
 - [Changelog](CHANGELOG.md)
 

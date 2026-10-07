@@ -55,6 +55,7 @@ mod maintenance;
 mod management;
 mod presentation;
 mod profile_forms;
+mod sources;
 
 const HELP: &str = concat!(
     "Ghostty Wall ",
@@ -68,6 +69,10 @@ const HELP: &str = concat!(
     "  ghostty-wall new PROFILE [IMAGE [--apply]]\n",
     "  ghostty-wall new PROFILE --generate SEED_HEX  # stable gradient-v1 PNG\n",
     "  ghostty-wall new PROFILE --source SOURCE --path CANDIDATE [--apply]\n",
+    "  ghostty-wall source list | show SOURCE | check SOURCE\n",
+    "  ghostty-wall source edit SOURCE local DIRECTORY\n",
+    "  ghostty-wall source edit SOURCE github OWNER/REPO [--ref REF] [--path PATH]\n",
+    "  ghostty-wall source remove SOURCE  # confirmed; unused Sources only\n",
     "  ghostty-wall source add SOURCE local DIRECTORY\n",
     "  ghostty-wall source add SOURCE github OWNER/REPO [--ref REF] [--path PATH]\n",
     "  ghostty-wall edit [PROFILE]     # visual draft; Save / Save and use / Cancel\n",
@@ -900,6 +905,9 @@ fn new_from_source(
 }
 
 fn command_source(args: &[String], output: &mut impl Write) -> Result<(), CliError> {
+    if args.first().map(String::as_str) != Some("add") {
+        return sources::command(args, output);
+    }
     let (id, kind, location, options) = match args {
         [action, id, kind, location, options @ ..] if action == "add" => (id, kind, location, options),
         _ => return Err(CliError::Usage("expected source add SOURCE local DIRECTORY or source add SOURCE github OWNER/REPO [--ref REF] [--path PATH]".into())),
@@ -1200,7 +1208,21 @@ fn command_edit(args: &[String], output: &mut impl Write) -> Result<(), CliError
 }
 
 fn atomic_intent_edit(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
-    match crate::init::atomic_edit(path, path, bytes) {
+    intent_edit_result(crate::init::atomic_edit(path, path, bytes))
+}
+
+fn atomic_intent_edit_if_unchanged(
+    path: &Path,
+    bytes: &[u8],
+    expected: &[u8],
+) -> Result<(), CliError> {
+    intent_edit_result(crate::init::atomic_edit_if_unchanged(
+        path, path, bytes, expected,
+    ))
+}
+
+fn intent_edit_result(result: Result<(), crate::init::InitError>) -> Result<(), CliError> {
+    match result {
         Err(crate::init::InitError::HookPublicationUncertain { path, source }) => {
             Err(CliError::Intent(format!(
                 "Intent edit at {} may already be published; inspect before retrying: {source}",
@@ -1477,7 +1499,7 @@ fn command_tui(
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         return write_text(
             output,
-            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k automatically preview without activating, even while loading.\nCompact layouts show list and sample; Enter/p enlarges the sample.\nTab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, then review. Edit: Wallpaper/Colors/Terminal.\nBoth: s Save without applying, u Save and use, Esc/q Cancel.\nSave and use confirms (default: Back to editor); declining keeps the draft.\nA definite save failure retains the draft; uncertainty requires inspection.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nManagement minimum 60x18 preserves photo space; smaller windows show resize\nguidance (Esc cancels). Create/Edit forms still support 40x12. Compact lists\nelide long IDs; the header shows the selection and * marks the active Profile.\nAll actions, nested image pickers, reports and first-start initialization stay full-screen.\nInput forms: Enter next/submit, Tab/Shift-Tab fields, Ctrl-U clear, Esc cancel.\nInvalid input retains values; F1 shows error details.\nDelete: y confirms, Enter/n/Esc/Ctrl-C cancels; arrows scroll the summary.\nCreate errors: F1 details. Editor/main results: v details.\nGhostty receives a static image behind sample text; other terminals show a\nlabelled color-cell fallback. Wallpaper uses linear-light sRGB (Ghostty's\nLinux default), not inferred native/P3 blending. Saved opacity/RGB are unchanged.\nInherited settings are illustrative; v explains limitations. Preview errors never activate. Random Use resolves again; a\nchanged Source may change the candidate. Local Profile/image changes invalidate\nthe sample. Internal previews are NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources, History, previous,\nsettings/Source configuration, doctor, init/repair, update and uninstall remain in Actions.\nReports: arrows/PageUp/PageDown scroll, Enter/Esc back. i views the original image.\nMaintenance mutations require y; Enter/n/Esc/Ctrl-C/D declines.\nLong jobs show progress; Esc closes read-only jobs (work may finish in background).\nOnce a mutation starts, wait for completion/recovery; cancellation is unavailable.\nUninstall returns to the browser and preserves Intent/History.\nRestart Ghostty Wall after an installed update; this process keeps its old version.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
+            "Usage: ghostty-wall tui [--seed HEX]\n\nProfile management: n Create, e Edit draft, x Delete (confirm), a Use.\nArrows/j/k automatically preview without activating, even while loading.\nCompact layouts show list and sample; Enter/p enlarges the sample.\nTab switches Profiles/Sources; ? opens all Actions.\nv shows scrollable result/error details; q quits.\nCreate: generate or choose an image, then review. Edit: Wallpaper/Colors/Terminal.\nBoth: s Save without applying, u Save and use, Esc/q Cancel.\nSave and use confirms (default: Back to editor); declining keeps the draft.\nA definite save failure retains the draft; uncertainty requires inspection.\nWide forms show a terminal-like sample beside controls; p toggles it when small.\nManagement minimum 60x18 preserves photo space; smaller windows show resize\nguidance (Esc cancels). Create/Edit forms still support 40x12. Compact lists\nelide long IDs; the header shows the selection and * marks the active Profile.\nAll actions, nested image pickers, reports and first-start initialization stay full-screen.\nInput forms: Enter next/submit, Tab/Shift-Tab fields, Ctrl-U clear, Esc cancel.\nInvalid input retains values; F1 shows error details.\nDelete: y confirms, Enter/n/Esc/Ctrl-C cancels; arrows scroll the summary.\nCreate errors: F1 details. Editor/main results: v details.\nGhostty receives a static image behind sample text; other terminals show a\nlabelled color-cell fallback. Wallpaper uses linear-light sRGB (Ghostty's\nLinux default), not inferred native/P3 blending. Saved opacity/RGB are unchanged.\nInherited settings are illustrative; v explains limitations. Preview errors never activate. Random Use resolves again; a\nchanged Source may change the candidate. Local Profile/image changes invalidate\nthe sample. Internal previews are NOT live Ghostty reload. Use commits an\nActivation; best-effort reload is reported separately, never visually verified.\nAdvanced field edits (f/c/t/w) save immediately; Sources (S Show, E Edit, C Check, Z Remove), History, previous,\nsettings/Source configuration, doctor, init/repair, update and uninstall remain in Actions.\nReports: arrows/PageUp/PageDown scroll, Enter/Esc back. i views the original image.\nMaintenance mutations require y; Enter/n/Esc/Ctrl-C/D declines.\nLong jobs show progress; Esc closes read-only jobs (work may finish in background).\nOnce a mutation starts, wait for completion/recovery; cancellation is unavailable.\nUninstall returns to the browser and preserves Intent/History.\nRestart Ghostty Wall after an installed update; this process keeps its old version.\nNon-terminal input retains the legacy line-based browser (key then Enter).\n",
         );
     }
     let seed = parse_seed_only(args)?;
@@ -1557,6 +1579,10 @@ fn command_tui(
                     line.trim(),
                     "n" | "m"
                         | "o"
+                        | "S"
+                        | "E"
+                        | "C"
+                        | "Z"
                         | "e"
                         | "r"
                         | "d"
@@ -1696,6 +1722,10 @@ fn tui_command(
             }
             write_text(output, "Type b at prompt to go back.\n")?;
             return Ok(());
+        }
+        "S" | "E" | "C" | "Z" => {
+            sources::line_flow(action, browser.selected_source().cloned(), input, output)?;
+            None
         }
         "l" => {
             command_list(output)?;

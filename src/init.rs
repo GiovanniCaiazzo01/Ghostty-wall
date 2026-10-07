@@ -1535,6 +1535,25 @@ pub(crate) fn atomic_edit(
         root_config,
         target,
         bytes,
+        None,
+        || {},
+        |directory| fs::File::open(directory).and_then(|dir| dir.sync_all()),
+    )
+}
+
+/// Publishes only if the target still matches the caller's reviewed snapshot.
+#[cfg(unix)]
+pub(crate) fn atomic_edit_if_unchanged(
+    root_config: &Path,
+    target: &Path,
+    bytes: &[u8],
+    expected: &[u8],
+) -> Result<(), InitError> {
+    atomic_edit_with_hooks(
+        root_config,
+        target,
+        bytes,
+        Some(expected),
         || {},
         |directory| fs::File::open(directory).and_then(|dir| dir.sync_all()),
     )
@@ -1545,6 +1564,7 @@ fn atomic_edit_with_hooks(
     root_config: &Path,
     target: &Path,
     bytes: &[u8],
+    expected: Option<&[u8]>,
     before_commit: impl FnOnce(),
     sync_parent: impl FnOnce(&Path) -> io::Result<()>,
 ) -> Result<(), InitError> {
@@ -1565,6 +1585,11 @@ fn atomic_edit_with_hooks(
         path: target.to_owned(),
         source,
     })?;
+    // A caller snapshot must not be replaced by a newer read after validation.
+    let baseline = expected.unwrap_or(prior_bytes.as_slice());
+    if prior_bytes.as_slice() != baseline {
+        return Err(InitError::RootConfigChanged(root_config.to_owned()));
+    }
     let parent = target
         .parent()
         .ok_or_else(|| InitError::WrongKind(target.to_owned()))?;
@@ -1611,11 +1636,11 @@ fn atomic_edit_with_hooks(
         {
             return Err(InitError::WrongKind(root_config.to_owned()));
         }
-        if fs::read(&current).map_err(|source| InitError::Io {
+        let current_bytes = fs::read(&current).map_err(|source| InitError::Io {
             path: current.clone(),
             source,
-        })? != prior_bytes
-        {
+        })?;
+        if current_bytes.as_slice() != baseline {
             return Err(InitError::RootConfigChanged(root_config.to_owned()));
         }
         fs::rename(&temp, target).map_err(|source| InitError::Io {
@@ -1638,6 +1663,16 @@ pub(crate) fn atomic_edit(
     _root_config: &Path,
     target: &Path,
     _bytes: &[u8],
+) -> Result<(), InitError> {
+    Err(InitError::WrongKind(target.to_owned()))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn atomic_edit_if_unchanged(
+    _root_config: &Path,
+    target: &Path,
+    _bytes: &[u8],
+    _expected: &[u8],
 ) -> Result<(), InitError> {
     Err(InitError::WrongKind(target.to_owned()))
 }
@@ -1720,6 +1755,7 @@ mod failure_tests {
             &target,
             &target,
             b"new\n",
+            None,
             || {},
             |_| Err(io::Error::other("injected fsync failure")),
         )
@@ -1738,6 +1774,7 @@ mod failure_tests {
             &target,
             &target,
             b"new\n",
+            None,
             || {
                 fs::write(&target, "user edit\n").unwrap();
             },
@@ -1746,6 +1783,42 @@ mod failure_tests {
         .unwrap_err();
         assert!(matches!(error, InitError::RootConfigChanged(_)));
         assert_eq!(fs::read(&target).unwrap(), b"user edit\n");
+    }
+
+    #[test]
+    fn stale_caller_snapshot_is_not_replaced_by_helper_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("config.toml");
+        let reviewed = b"reviewed config\n";
+        // An external editor saved after Source validation but before this helper.
+        fs::write(&target, b"external edit\n").unwrap();
+        let error =
+            atomic_edit_if_unchanged(&target, &target, b"source edit\n", reviewed).unwrap_err();
+        assert!(matches!(error, InitError::RootConfigChanged(_)));
+        assert_eq!(fs::read(&target).unwrap(), b"external edit\n");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn caller_snapshot_remains_required_after_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("config.toml");
+        let reviewed = b"reviewed config\n";
+        fs::write(&target, reviewed).unwrap();
+        let error = atomic_edit_with_hooks(
+            &target,
+            &target,
+            b"source edit\n",
+            Some(reviewed),
+            || {
+                fs::write(&target, b"external edit\n").unwrap();
+            },
+            |_| panic!("a stale edit must not reach publication"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, InitError::RootConfigChanged(_)));
+        assert_eq!(fs::read(&target).unwrap(), b"external edit\n");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

@@ -845,25 +845,8 @@ fn resolve_github_source(
     let (candidate, selection_json) = match selection {
         WallpaperSelection::Random => {
             let seed = seed.ok_or(PlanError::MissingSeed)?;
-            let tree = github
-                .tree(repository, &commit, true)
-                .map_err(|error| github_error(source_id, error))?;
-            if tree.truncated() {
-                return Err(PlanError::Github {
-                    source_id: source_id.to_string(),
-                    kind: GithubResolutionError::IncompleteTree,
-                });
-            }
-            let candidates = CandidateSet::new(tree.entries().iter().filter_map(|entry| {
-                if entry.kind() != GithubEntryKind::Blob
-                    || !matches!(entry.mode(), "100644" | "100755")
-                {
-                    return None;
-                }
-                let relative = github_relative_path(entry.path(), source_path)?;
-                let candidate = CandidatePath::from_str(relative).ok()?;
-                eligible(Path::new(candidate.as_str())).then_some(candidate)
-            }));
+            let candidates =
+                github_candidates(source_id, repository, &commit, source_path, github)?;
             let (_, candidate, selection) = random_selection(source_id, &candidates, seed)?;
             (candidate, selection)
         }
@@ -902,6 +885,80 @@ fn resolve_github_source(
         selection: selection_json,
         bytes,
     })
+}
+
+/// Read-only Source listing shared with the maintenance CLI. Does not read image bytes.
+pub(crate) fn source_candidate_count(
+    config_dir: &Path,
+    home: &Path,
+    config: &ConfigIntent,
+    source_id: &IntentId,
+    github: &dyn GithubApi,
+) -> Result<usize, PlanError> {
+    let source = config
+        .sources
+        .iter()
+        .find(|(id, _)| id == source_id)
+        .map(|(_, source)| source)
+        .ok_or_else(|| PlanError::UnknownSource(source_id.to_string()))?;
+    let candidates = match source {
+        SourceIntent::LocalDirectory { path } => {
+            let root = resolve_local_root(config_dir, home, path)?;
+            enumerate_candidates(&root, &open_source_root(&root)?)?.0
+        }
+        SourceIntent::Github {
+            repository,
+            reference,
+            path,
+        } => {
+            let reference = match reference {
+                Some(reference) => reference.clone(),
+                None => github
+                    .default_branch(repository)
+                    .map_err(|error| github_error(source_id, error))?,
+            };
+            let commit = github
+                .resolve_commit(repository, &reference)
+                .map_err(|error| github_error(source_id, error))?;
+            if !valid_github_commit(&commit) {
+                return Err(github_error(source_id, GithubApiError::Unavailable));
+            }
+            github_candidates(source_id, repository, &commit, path.as_ref(), github)?
+        }
+    };
+    if candidates.is_empty() {
+        return Err(PlanError::EmptyCandidateSet(source_id.to_string()));
+    }
+    Ok(candidates.len())
+}
+
+fn github_candidates(
+    source_id: &IntentId,
+    repository: &str,
+    commit: &str,
+    source_path: Option<&SourcePath>,
+    github: &dyn GithubApi,
+) -> Result<CandidateSet, PlanError> {
+    let tree = github
+        .tree(repository, commit, true)
+        .map_err(|error| github_error(source_id, error))?;
+    if tree.truncated() {
+        return Err(PlanError::Github {
+            source_id: source_id.to_string(),
+            kind: GithubResolutionError::IncompleteTree,
+        });
+    }
+    Ok(CandidateSet::new(tree.entries().iter().filter_map(
+        |entry| {
+            if entry.kind() != GithubEntryKind::Blob || !matches!(entry.mode(), "100644" | "100755")
+            {
+                return None;
+            }
+            let relative = github_relative_path(entry.path(), source_path)?;
+            let candidate = CandidatePath::from_str(relative).ok()?;
+            eligible(Path::new(candidate.as_str())).then_some(candidate)
+        },
+    )))
 }
 
 fn random_selection(
@@ -1476,5 +1533,128 @@ fn insert_optional(plan: &mut Value, key: &'static str, value: Option<Value>) {
         plan.as_object_mut()
             .expect("plan is object")
             .insert(key.to_owned(), value);
+    }
+}
+
+#[cfg(test)]
+mod source_checks {
+    use super::*;
+    use crate::github::{GithubTree, GithubTreeEntry};
+    use std::cell::RefCell;
+
+    struct FakeGithub {
+        calls: RefCell<Vec<String>>,
+        failure: Option<GithubApiError>,
+        truncated: bool,
+        empty: bool,
+        bad_commit: bool,
+    }
+    impl GithubApi for FakeGithub {
+        fn default_branch(&self, _: &str) -> Result<String, GithubApiError> {
+            self.calls.borrow_mut().push("default".into());
+            Ok("main".into())
+        }
+        fn resolve_commit(&self, _: &str, reference: &str) -> Result<String, GithubApiError> {
+            self.calls.borrow_mut().push(format!("ref:{reference}"));
+            Ok(if self.bad_commit {
+                "bad".into()
+            } else {
+                "a".repeat(40)
+            })
+        }
+        fn tree(&self, _: &str, _: &str, recursive: bool) -> Result<GithubTree, GithubApiError> {
+            assert!(recursive);
+            self.calls.borrow_mut().push("tree".into());
+            if let Some(error) = self.failure {
+                return Err(error);
+            }
+            let entries = if self.empty {
+                vec![]
+            } else {
+                vec![
+                    GithubTreeEntry::new("images/sky.PNG", "100644", GithubEntryKind::Blob),
+                    GithubTreeEntry::new("images/sky.PNG", "100644", GithubEntryKind::Blob),
+                    GithubTreeEntry::new("images/run.jpg", "100755", GithubEntryKind::Blob),
+                    GithubTreeEntry::new("images/link.png", "120000", GithubEntryKind::Blob),
+                    GithubTreeEntry::new("images/submodule.png", "160000", GithubEntryKind::Commit),
+                    GithubTreeEntry::new("other.png", "100644", GithubEntryKind::Blob),
+                    GithubTreeEntry::new("images/../escape.png", "100644", GithubEntryKind::Blob),
+                ]
+            };
+            Ok(GithubTree::new(entries, self.truncated))
+        }
+        fn blob(&self, _: &str, _: &str, _: &str) -> Result<Vec<u8>, GithubApiError> {
+            panic!("Source check must never download images")
+        }
+    }
+
+    #[test]
+    fn github_listing_reuses_filtering_without_blob_reads_and_classifies_failures() {
+        let id = "remote".parse().unwrap();
+        let root = Path::new("/unused");
+        for reference in ["", "ref = 'feature/sky'\n"] {
+            let config = crate::codec::intent::parse_config_toml(&format!("schema_version = 1\n[sources.remote]\nkind = 'github'\nrepository = 'owner/repo'\n{reference}path = 'images'\n")).unwrap();
+            let mut github = FakeGithub {
+                calls: RefCell::new(vec![]),
+                failure: None,
+                truncated: false,
+                empty: false,
+                bad_commit: false,
+            };
+            assert_eq!(
+                source_candidate_count(root, root, &config, &id, &github).unwrap(),
+                2
+            );
+            assert_eq!(
+                *github.calls.borrow(),
+                if reference.is_empty() {
+                    vec!["default", "ref:main", "tree"]
+                } else {
+                    vec!["ref:feature/sky", "tree"]
+                }
+            );
+            for (error, kind) in [
+                (
+                    GithubApiError::Authentication,
+                    GithubResolutionError::Authentication,
+                ),
+                (
+                    GithubApiError::RateLimited,
+                    GithubResolutionError::RateLimited,
+                ),
+                (
+                    GithubApiError::Unavailable,
+                    GithubResolutionError::Unavailable,
+                ),
+            ] {
+                github.failure = Some(error);
+                assert!(
+                    matches!(source_candidate_count(root, root, &config, &id, &github), Err(PlanError::Github { kind: actual, .. }) if actual == kind)
+                );
+            }
+            github.failure = None;
+            github.truncated = true;
+            assert!(matches!(
+                source_candidate_count(root, root, &config, &id, &github),
+                Err(PlanError::Github {
+                    kind: GithubResolutionError::IncompleteTree,
+                    ..
+                })
+            ));
+            github.truncated = false;
+            github.empty = true;
+            assert!(matches!(
+                source_candidate_count(root, root, &config, &id, &github),
+                Err(PlanError::EmptyCandidateSet(_))
+            ));
+            github.bad_commit = true;
+            assert!(matches!(
+                source_candidate_count(root, root, &config, &id, &github),
+                Err(PlanError::Github {
+                    kind: GithubResolutionError::Unavailable,
+                    ..
+                })
+            ));
+        }
     }
 }

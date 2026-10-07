@@ -4,6 +4,7 @@ For initial setup, follow the [quick start](../README.md#quick-start).
 
 - [Create or edit a profile](#create-or-edit-a-profile)
 - [Browse profiles](#browse-profiles)
+- [Maintain wallpaper sources](#maintain-wallpaper-sources)
 - [Delete a profile](#delete-a-profile)
 - [Update safely](#update-safely)
 - [Understand prompts](#understand-prompts)
@@ -70,6 +71,25 @@ Wallpaper opacity fades the image toward the background, without changing transp
 Edit `config.toml` for sources and `profiles/*.toml` for recipes. Never edit generated `current.ghostty`. See the [configuration reference](https://giovannicaiazzo01.github.io/Ghostty-wall/configuration/).
 
 Back up profiles and history before downgrading: older binaries may not read version 2 profiles.
+
+## Maintain wallpaper sources
+
+```bash
+ghostty-wall source list
+ghostty-wall source show wallpapers
+ghostty-wall source edit wallpapers local ~/Pictures/moved-wallpapers
+ghostty-wall source edit remote github owner/repo --ref main --path images
+ghostty-wall source check wallpapers
+ghostty-wall source remove unused
+```
+
+`show` lists the definition and dependent saved Profiles. `edit` keeps the ID and kind; it replaces the complete definition, so omitted GitHub ref/path reset to the default branch/repository root. Profiles stay byte-preserved; future resolution may choose a different wallpaper. Active configuration and History stay unchanged.
+
+A valid but unavailable location can be saved. `check` distinguishes an unavailable Source from an empty Candidate Set; a successful PNG/JPEG listing does not prove every image decodes. Check never applies or reloads.
+
+Removal requires `y`; Enter/n/cancel/EOF cancels. Referencing Profiles block removal; unreadable, invalid or unsafe Profile files block dependency analysis rather than count as unused. Only the Source entry is removed—not original images, managed images, replay assets, Environments or History. Concurrent configuration changes require reopening; references are checked again under the mutation lock.
+
+TUI Actions: `S` Show, `E` Edit, `C` Check, `Z` Remove. Choose a Source ID, review prefilled edit fields, then confirm with `y`. Declining Save retains the fields; Esc closes the form without saving. Successful changes refresh the browser preview without applying anything. Source-kind conversion and ID rename are unsupported.
 
 ## Browse profiles
 
