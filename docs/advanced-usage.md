@@ -64,7 +64,17 @@ Field edits **save immediately without applying**. Run `apply` when ready; `auto
 
 New image profiles start at opacity **0.05**, unless you choose otherwise. Existing profiles, edits, duplicates and restored environments keep their settings, including omitted opacity.
 
-Wallpaper opacity fades the image toward the background, without changing transparency or text colors. Light backgrounds can make it lighter. Readability still depends on the colors.
+Wallpaper opacity fades the image toward the background, without changing terminal transparency. Automatic text colors are recalculated for the chosen opacity; customized colors stay unchanged. Light backgrounds can make the image lighter.
+
+### Readability
+
+New resolutions use `kmeans-v4`: automatic foreground, all 16 ANSI text colors and cursor target at least 4.5:1 against the brightest modeled background. Analysis checks every source pixel, including image alpha, in linear-light sRGB. The solid background is also included, so the bound covers cropping, fit, position, repeat and uncovered areas without assuming window dimensions. This is conservative: cropped-out highlights can still lighten automatic colors. Selection text is checked against its solid selection background, not the wallpaper.
+
+Changing image or opacity recalculates automatic text colors. Image analysis is reused while adjusting opacity in the editor. Customized slots, including background and selection, are preserved; their choices can invalidate automatic contrast bounds. Named themes and explicit palettes are not recolored.
+
+At high image opacity, even white text may not reach 4.5:1. The sample warns about low contrast and recommends reducing image opacity; the tool does not silently change it. Browser details (`v`) report estimated minimum contrast across thumbnail regions, including ANSI, cursor and selection. This estimate can detect problems, not certify every source pixel or terminal application. Dim/faint text, application-specific colors and cursor text are not certified.
+
+Omitted image opacity is unknown: automatic colors retain the flat-background correction, while the sample illustrates opacity 1.0. Neither is a discovered Ghostty setting; set opacity explicitly to enable composition-aware correction. Native blending, Display P3, desktop transparency, external overrides and unmanaged settings can differ from this model. No universal accessibility guarantee is made. Saved Profiles are not migrated; applying one again resolves automatic colors with v4. History stores resolved colors and keeps replaying its original result, including v1–v3 provenance. Older binaries may not read new v4 Activations: back up the Managed Root before downgrading.
 
 ### Advanced files and compatibility
 

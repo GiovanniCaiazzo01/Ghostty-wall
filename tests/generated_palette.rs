@@ -26,7 +26,7 @@ fn generated_palette_is_deterministic_complete_and_readable() {
     assert_eq!(colors["palette"][8], "807962");
     assert_eq!(colors["palette"][14], "219ac7");
     assert_eq!(first["color_resolution"]["kind"], "generated");
-    assert_eq!(first["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_eq!(first["color_resolution"]["algorithm"], "kmeans-v4");
     let palette = colors["palette"].as_array().unwrap();
     assert_eq!(palette.len(), 16);
     assert!(
@@ -55,7 +55,7 @@ fn colorful_wallpaper_tints_all_text_colors_without_losing_contrast() {
     let colors = &plan["environment"]["manifest"]["colors"];
     let background = colors["background"].as_str().unwrap();
     let foreground = colors["foreground"].as_str().unwrap();
-    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
     assert_ne!(foreground, "ffffff");
     assert_ne!(foreground, "000000");
     for color in colors["palette"].as_array().unwrap() {
@@ -97,6 +97,28 @@ fn generated_palette_keeps_monochrome_wallpaper_useful() {
 }
 
 #[test]
+fn white_wallpaper_text_is_readable_at_default_opacity() {
+    let fixture = fixture("white.png", include_bytes!("fixtures/white.png"));
+    let plan = profile_plan(&fixture, "opacity = 0.05\n[colors]\nmode = \"generated\"\n").unwrap();
+    let colors = &plan["environment"]["manifest"]["colors"];
+    let background = luminance(colors["background"].as_str().unwrap());
+    let composed = background * 0.95 + 0.05;
+    for entry in colors["palette"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain([&colors["foreground"], &colors["cursor"]])
+    {
+        let text = luminance(entry.as_str().unwrap());
+        let ratio = (text.max(composed) + 0.05) / (text.min(composed) + 0.05);
+        assert!(
+            ratio >= 4.5,
+            "{entry} on composed white wallpaper: {ratio:.3}:1"
+        );
+    }
+}
+
+#[test]
 fn generated_colors_deduplicate_with_identical_explicit_colors() {
     let fixture = fixture("palette.png", include_bytes!("fixtures/palette.png"));
     let generated = generated_plan(&fixture).unwrap();
@@ -111,7 +133,8 @@ fn generated_colors_deduplicate_with_identical_explicit_colors() {
     let explicit = profile_plan(
         &fixture,
         &format!(
-            r#"[colors]
+            r#"opacity = 0.0
+[colors]
 mode = "explicit"
 background = "{}"
 foreground = "{}"
@@ -157,7 +180,7 @@ fn generated_palette_rejects_malformed_and_oversized_images() {
 }
 
 fn generated_plan(path: &std::path::Path) -> Result<Value, ghostty_wall::plan::PlanError> {
-    profile_plan(path, "[colors]\nmode = \"generated\"\n")
+    profile_plan(path, "opacity = 0.0\n[colors]\nmode = \"generated\"\n")
 }
 
 fn profile_plan(

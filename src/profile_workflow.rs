@@ -243,7 +243,14 @@ impl ProfileDraft {
             .image
             .as_ref()
             .ok_or(WorkflowError::Invalid("draft has no staged image"))?;
-        crate::palette::generate_kmeans_v3(bytes)
+        let profile = crate::codec::intent::parse_profile_toml(self.document())?;
+        let opacity = match profile.wallpaper {
+            Some(crate::domain::WallpaperIntent::Source { opacity, .. }) => {
+                opacity.map_or(0, |v| v.get())
+            }
+            _ => 0,
+        };
+        crate::palette::generate_kmeans_v4(bytes, opacity)
             .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))
     }
     /// Replaces draft Intent after strict validation. No disk write occurs.

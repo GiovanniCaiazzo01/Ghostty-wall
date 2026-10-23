@@ -38,6 +38,8 @@ Run `ghostty-wall` to browse your saved looks. Select a profile to preview it; c
 
 [Watch the short browser walkthrough](media/screenshots/profile-browser.gif) (captured frames from a real Ghostty window; internal previews, not live wallpaper switching).
 
+Automatic colors now account for wallpaper brightness and opacity. If the sample warns about low contrast, reduce image opacity or adjust customized colors; these are never overwritten automatically. Existing History replays unchanged. See [readability limits](docs/advanced-usage.md#readability).
+
 ## Useful commands
 
 ```bash

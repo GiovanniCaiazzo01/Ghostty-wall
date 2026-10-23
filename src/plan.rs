@@ -622,10 +622,18 @@ fn plan_profile_json_inner(
             Some(theme.as_str()),
         ),
         Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
-            let generated = crate::palette::generate_kmeans_v3(
+            let opacity = match &wallpaper {
+                Some(crate::domain::WallpaperManifest::Image(image)) => {
+                    // Unknown inherited opacity cannot justify changing automatic text.
+                    image.opacity().map_or(0, |v| v.get())
+                }
+                _ => 0,
+            };
+            let generated = crate::palette::generate_kmeans_v4(
                 selected_asset_bytes
                     .as_deref()
                     .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
+                opacity,
             )
             .map_err(|_| PlanError::UnsupportedImage)?;
             let resolved = match &profile.colors {
@@ -697,7 +705,7 @@ fn plan_profile_json_inner(
     let color_resolution = match &profile.colors {
         Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
             // RFC 0005: preserve historical algorithm provenance across palette changes.
-            Some(json!({ "kind": "generated", "algorithm": "kmeans-v3" }))
+            Some(json!({ "kind": "generated", "algorithm": "kmeans-v4" }))
         }
         Some(ColorsIntent::Theme { .. }) => {
             let theme = theme_name.ok_or(PlanError::Unsupported("missing theme provenance"))?;

@@ -89,6 +89,7 @@ const HELP: &str = concat!(
     "  ghostty-wall uninstall\n",
     "  ghostty-wall update [--check]  # release-installer or Cargo; --check is read-only\n",
     "\nNew image Profiles start at wallpaper opacity 0.05; terminal transparency is unchanged.\n",
+    "Automatic colors account for wallpaper opacity; low-contrast samples advise reducing it.\n",
     "Live draft sessions are library-only; CLI/TUI previews do not reload Ghostty.\n",
     "After an interrupted session, apply/previous restore from History before committing; doctor is read-only.\n"
 );

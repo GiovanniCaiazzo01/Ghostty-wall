@@ -52,7 +52,7 @@ pub struct ProfileEditor {
     starting: Option<Activation>,
     image: Option<Vec<u8>>,
     image_identity: Option<ImageWallpaper>,
-    generated: Option<ColorsManifest>,
+    generated: Option<crate::palette::GeneratedPalette>,
     theme_colors: Option<ColorsManifest>,
 }
 impl ProfileEditor {
@@ -430,10 +430,15 @@ impl ProfileEditor {
             None => None,
             Some(ColorsIntent::Theme { .. }) => self.theme_colors.clone(),
             Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
+                let opacity = match &wallpaper {
+                    Some(WallpaperManifest::Image(image)) => image.opacity().map_or(0, |v| v.get()),
+                    _ => 0,
+                };
                 let base = self
                     .generated
-                    .clone()
-                    .ok_or(WorkflowError::Invalid("automatic colors need an image"))?;
+                    .as_ref()
+                    .ok_or(WorkflowError::Invalid("automatic colors need an image"))?
+                    .for_opacity(opacity);
                 Some(
                     if let Some(ColorsIntent::GeneratedWithOverrides(overrides)) = intent.colors {
                         crate::plan::apply_color_overrides(base, &overrides)
@@ -478,8 +483,8 @@ impl ProfileEditor {
     }
 }
 
-fn generate_colors(bytes: &[u8]) -> Result<ColorsManifest, WorkflowError> {
-    crate::palette::generate_kmeans_v3(bytes)
+fn generate_colors(bytes: &[u8]) -> Result<crate::palette::GeneratedPalette, WorkflowError> {
+    crate::palette::analyze(bytes)
         .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))
 }
 fn ensure_table(doc: &mut DocumentMut, name: &str) {

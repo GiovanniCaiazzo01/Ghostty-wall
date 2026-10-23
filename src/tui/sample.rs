@@ -91,6 +91,14 @@ impl Sample {
         let mut text = String::from(
             "Static internal preview; not effective Ghostty configuration. Wallpaper uses linear-light sRGB compositing with the unchanged managed opacity and RGB values, matching Ghostty linear/linear-corrected blending (Linux default). Native blending, Display P3, user overrides, terminal font, blur and desktop transparency are not inferred or simulated. Image geometry uses a synthetic 8x16-pixel cell.\n",
         );
+        if let Some(ratio) =
+            sampled_contrast(&self.manifest, &self.thumbnail, self.source.is_some())
+        {
+            text.push_str(&format!("Sampled minimum text contrast: {ratio:.2}:1 (target 4.5:1). This is an estimate over thumbnail regions, not an accessibility guarantee.\n"));
+            if ratio < 4.5 {
+                text.push_str("Low contrast: reduce wallpaper opacity or explicitly reset/customize failing colors. Customized colors are never corrected automatically.\n");
+            }
+        }
         if self.manifest.colors().is_none() {
             text.push_str("Colors unmanaged: neutral illustrative text/background, not your inherited colors.\n");
         }
@@ -186,6 +194,53 @@ pub(crate) fn draw_sample(
     draw_surface(frame, area, manifest, thumbnail, false);
 }
 
+/// Sampled regions only: checking a thumbnail cannot certify every source pixel.
+fn sampled_contrast(
+    manifest: &EnvironmentManifest,
+    thumbnail: &Option<image::RgbImage>,
+    composited: bool,
+) -> Option<f64> {
+    use crate::palette::relative_luminance;
+    let colors = manifest.colors()?;
+    let ratio = |left: f64, right: f64| (left.max(right) + 0.05) / (left.min(right) + 0.05);
+    let text: Vec<_> = std::iter::once(colors.foreground())
+        .chain(colors.palette().iter().copied())
+        .chain(colors.cursor())
+        .map(|c| relative_luminance(c.as_rgb()))
+        .collect();
+    let opacity = if composited {
+        1_000_000
+    } else {
+        match manifest.wallpaper() {
+            Some(WallpaperManifest::Image(image)) => {
+                image.opacity().map_or(1_000_000, |v| u64::from(v.get()))
+            }
+            _ => 0,
+        }
+    };
+    let blend = graphics::LinearBlend::new(colors.background().as_rgb(), opacity);
+    let mut minimum = f64::INFINITY;
+    let backgrounds = std::iter::once(colors.background().as_rgb()).chain(
+        thumbnail
+            .iter()
+            .flat_map(|image| image.pixels())
+            .map(|p| blend.apply([p[0], p[1], p[2], 255])),
+    );
+    for background in backgrounds {
+        let background = relative_luminance(background);
+        for foreground in &text {
+            minimum = minimum.min(ratio(*foreground, background));
+        }
+    }
+    if let (Some(bg), Some(fg)) = (colors.selection_background(), colors.selection_foreground()) {
+        minimum = minimum.min(ratio(
+            relative_luminance(bg.as_rgb()),
+            relative_luminance(fg.as_rgb()),
+        ));
+    }
+    Some(minimum)
+}
+
 fn draw_surface(
     frame: &mut Frame,
     area: Rect,
@@ -202,7 +257,10 @@ fn draw_surface(
         }
         _ => false,
     };
-    let note = if thumbnail.is_none() {
+    let low_contrast = sampled_contrast(manifest, thumbnail, composited).is_some_and(|v| v < 4.5);
+    let note = if low_contrast {
+        "Low contrast; reduce image opacity"
+    } else if thumbnail.is_none() {
         match manifest.wallpaper() {
             Some(WallpaperManifest::None) => "Wallpaper disabled",
             None => "Wallpaper unmanaged; not shown",
@@ -272,7 +330,7 @@ fn draw_surface(
         )),
         Line::from(Span::styled(
             if manifest.colors().is_some() {
-                "Readable text sample"
+                "Normal text sample"
             } else {
                 "Wallpaper settings may be inherited"
             },
@@ -320,6 +378,49 @@ mod tests {
         WallpaperPosition,
     };
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn low_contrast_is_reported_without_changing_custom_colors() {
+        let colors = ColorsManifest::new(
+            "555555".parse().unwrap(),
+            "c9c9c9".parse().unwrap(),
+            ["c9c9c9".parse().unwrap(); 16],
+        );
+        let manifest = EnvironmentManifest::new(
+            Some(WallpaperManifest::Image(
+                ImageWallpaper::new(Sha256Digest::from_bytes([0; 32]), MediaType::Png)
+                    .with_opacity(OpacityMillionths::new(50_000).unwrap()),
+            )),
+            Some(colors.clone()),
+            None,
+        );
+        let mut sample = Sample::for_preview(
+            manifest,
+            Some(include_bytes!("../../tests/fixtures/white.png")),
+        )
+        .unwrap();
+        sample.prepare_graphics(Rect::new(0, 0, 40, 16)).unwrap();
+        let ratio = sampled_contrast(&sample.manifest, &sample.thumbnail, true).unwrap();
+        assert!((ratio - 3.404).abs() < 0.05);
+        assert!(
+            sample
+                .guidance()
+                .contains("Low contrast: reduce wallpaper opacity")
+        );
+        assert_eq!(sample.manifest.colors(), Some(&colors));
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        terminal
+            .draw(|frame| sample.draw(frame, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Low contrast; reduce image opacity"));
+    }
 
     #[test]
     fn preview_matches_ghostty_linear_light_reference_pixels_without_raising_opacity() {
