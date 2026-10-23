@@ -8,6 +8,7 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ### Fixed
 
+- Browser Use commits the reviewed image bytes, resolved colors and managed settings without resolving again. Input changes are checked under the mutation lock and require a refreshed preview and another explicit Use; loading and failed previews cannot apply. Standalone CLI apply retains normal resolution.
 - Automatic `kmeans-v4` text colors account for linear-sRGB wallpaper brightness, alpha and selected opacity; customized slots and historical replay remain unchanged. Samples warn when contrast is insufficient, including recipes where image opacity is too high for automatic colors alone.
 - Profile browser no longer repaints while idle. Palette clustering stops at stable centers without changing v1–v3 palette output; editor opacity changes reuse image analysis.
 

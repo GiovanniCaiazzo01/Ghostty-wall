@@ -110,23 +110,14 @@ pub(super) fn run(
             }
             Input::Command('?') => view.menu = Some(0),
             Input::Command('a') => {
-                let result = browser
-                    .selected_profile()
-                    .ok_or_else(|| {
-                        CliError::Input("Select a Profile to Use; no files changed.".into())
-                    })
-                    .and_then(|id| {
-                        preview::set_seed(application, id, previews.seed)?;
-                        application.apply(id)
-                    });
+                let result = previews.apply(application, browser, &mut view);
                 view.status = match result {
                     Ok(outcome) => {
                         activation_report(outcome.activation_id(), outcome.reload_outcome(), None)
                     }
                     Err(e) => e.to_string(),
                 };
-                // Use already resolves again. Retain the inspected sample rather than
-                // paying for another image resolution merely to update the active marker.
+                // Use commits captured content; updating the active marker needs no resolution.
                 refresh_active(application, &mut view);
             }
             Input::Command('v') => {

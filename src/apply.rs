@@ -63,6 +63,9 @@ pub enum ApplyError {
     /// Internally generated Plan disagreed with validated domain content.
     #[error("resolved Plan violated an internal invariant")]
     InvalidPlan,
+    /// Inputs changed while an interactive reviewed result was awaiting publication.
+    #[error("preview inputs changed; review the refreshed sample before Use")]
+    StalePreview,
 }
 
 /// Durable Activation result plus separate best-effort reload outcome.
@@ -219,6 +222,36 @@ fn apply_resolved_profile<R: ReloadAdapter>(
         activated_at,
         &plan,
         asset_bytes.as_deref(),
+    )?;
+    drop(lock);
+    Ok(ApplyOutcome {
+        activation_id: id,
+        reload_outcome: reload.reload(),
+    })
+}
+
+/// Apply internally captured, immutable preview content after checking its inputs under lock.
+/// Never accepts user-supplied Plan JSON; standalone apply continues resolving normally.
+pub(crate) fn apply_reviewed_profile<R: ReloadAdapter>(
+    managed_root: &Path,
+    effective_root_config: &Path,
+    activated_at: &str,
+    reload: R,
+    plan: &Value,
+    asset_bytes: Option<&[u8]>,
+    inputs_current: impl FnOnce() -> bool,
+) -> Result<ApplyOutcome, ApplyError> {
+    validate_timestamp(activated_at)?;
+    let lock = exclusive_state_lock(&managed_root.join("state.lock"))?;
+    if !inputs_current() {
+        return Err(ApplyError::StalePreview);
+    }
+    let id = apply_resolved_profile_unlocked(
+        managed_root,
+        effective_root_config,
+        activated_at,
+        plan,
+        asset_bytes,
     )?;
     drop(lock);
     Ok(ApplyOutcome {
