@@ -127,7 +127,7 @@ impl Sample {
                 text.push_str("Wallpaper unmanaged: inherited image is unknown and is not shown.\n")
             }
         }
-        text.push_str("Unmanaged cursor/selection colors are labelled inherited. Unsupported graphics use a color-cell fallback, not a recognizable photograph. Random Use resolves again with the session seed; changed Sources can produce another candidate.\n");
+        text.push_str("Unmanaged cursor/selection colors are labelled inherited. Unsupported graphics use a color-cell fallback, not a recognizable photograph. Browser Use commits the captured image, colors and managed settings. Changed local inputs require a refreshed preview and a new explicit Use; loading/failed previews cannot apply.\n");
         text
     }
 

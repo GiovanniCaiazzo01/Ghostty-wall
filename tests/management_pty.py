@@ -221,6 +221,7 @@ class ManagementPty(unittest.TestCase):
         self.assertEqual(len(list((self.root / "history/activations").glob("*.json"))), 1)
         document = (self.root / "profiles/generated.toml").read_text()
         self.assertIn('algorithm = "gradient-v1"', document)
+        session.wait(b"Cursor")  # Use requires the prepared browser sample.
         session.send("a")
         session.wait(b"Configuration updated; reload Ghostty manually.")
         session.wait(b"generated [active]")

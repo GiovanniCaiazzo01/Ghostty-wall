@@ -14,13 +14,14 @@ struct Request {
 #[derive(Default)]
 struct Mailbox {
     pending: Option<Request>,
-    completed: Option<(u64, ratatui::layout::Rect, Result<Sample, String>)>,
+    completed: Option<(u64, ratatui::layout::Rect, Result<Prepared, String>)>,
     closed: bool,
 }
 
 pub(super) struct Previews {
     mailbox: Arc<(Mutex<Mailbox>, Condvar)>,
     generation: u64,
+    ready: Option<Prepared>,
     pub seed: ResolutionSeed,
     pub area: ratatui::layout::Rect,
 }
@@ -85,13 +86,13 @@ impl Previews {
                     if state.closed {
                         return;
                     }
-                    state.completed =
-                        Some((request.generation, request.area, result.map(|p| p.sample)));
+                    state.completed = Some((request.generation, request.area, result));
                 }
             })?;
         Ok(Self {
             mailbox,
             generation: 0,
+            ready: None,
             seed,
             area: ratatui::layout::Rect::default(),
         })
@@ -109,6 +110,7 @@ impl Previews {
         area: ratatui::layout::Rect,
     ) {
         self.area = area;
+        self.ready = None;
         view.sample = None;
         view.preview_error = "Loading selected Profile...".into();
         let mut state = self.mailbox.0.lock().unwrap();
@@ -132,11 +134,13 @@ impl Previews {
                 return false;
             }
             match result {
-                Ok(sample) => {
-                    view.sample = Some(sample);
+                Ok(prepared) => {
+                    view.sample = Some(prepared.sample.clone());
+                    self.ready = Some(prepared);
                     view.preview_error.clear();
                 }
                 Err(error) => {
+                    self.ready = None;
                     view.sample = None;
                     view.preview_error = error;
                 }
@@ -144,6 +148,43 @@ impl Previews {
             return true;
         }
         false
+    }
+
+    pub fn apply(
+        &mut self,
+        application: &Application,
+        browser: &TerminalBrowser,
+        view: &mut tui::View,
+    ) -> Result<ApplyOutcome, CliError> {
+        let prepared = self
+            .ready
+            .as_ref()
+            .filter(|prepared| {
+                prepared.plan.pointer("/profile/id").and_then(Value::as_str)
+                    == browser.selected_profile().map(IntentId::as_str)
+            })
+            .ok_or_else(|| {
+                CliError::Input("Wait for current preview before Use; no files changed.".into())
+            })?;
+        let result = crate::apply::apply_reviewed_profile(
+            &application.paths.managed_root(),
+            &application.paths.ghostty_root_config(),
+            &timestamp()?,
+            platform_reload_adapter(),
+            &prepared.plan,
+            prepared.asset_bytes.as_deref(),
+            || !prepared.changed(),
+        );
+        match result {
+            Err(crate::apply::ApplyError::StalePreview) => {
+                self.request(browser, view);
+                Err(CliError::Input(
+                    "Preview changed; review refreshed sample, then Use again. No files changed."
+                        .into(),
+                ))
+            }
+            result => result.map_err(CliError::Apply),
+        }
     }
 }
 
@@ -181,6 +222,8 @@ pub(super) fn set_seed(
 #[derive(Clone)]
 struct Prepared {
     sample: Sample,
+    plan: Value,
+    asset_bytes: Option<Arc<[u8]>>,
     files: Vec<FileVersion>,
 }
 
@@ -220,6 +263,7 @@ fn prepare(id: &IntentId, seed: ResolutionSeed) -> Result<Prepared, CliError> {
     let mut files = vec![
         FileVersion::capture(root.join("config.toml")),
         FileVersion::capture(root.join("profiles").join(format!("{id}.toml"))),
+        FileVersion::capture(process_paths()?.ghostty_root_config()),
     ];
     let mut application = Application::load(None)?;
     let intent = set_seed(&mut application, id, seed)?;
@@ -261,5 +305,10 @@ fn prepare(id: &IntentId, seed: ResolutionSeed) -> Result<Prepared, CliError> {
             "Profile/image changed during preparation; select again.".into(),
         ));
     }
-    Ok(Prepared { sample, files })
+    Ok(Prepared {
+        sample,
+        plan,
+        asset_bytes: image.map(Arc::from),
+        files,
+    })
 }

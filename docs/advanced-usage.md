@@ -125,7 +125,9 @@ Moving the selection previews without applying. **Choose Use to apply.**
 
 **The sample is internal, not a live Ghostty preview.** Wallpaper blending and colors are approximate; fonts, blur, transparency, geometry, unmanaged settings and overrides can differ. Unsupported graphics use a labelled color-cell fallback.
 
-Random previews and Use share a seed, but source changes can change the applied image. Reselect to retry errors or refresh remote content. History replay assigns no active-profile marker.
+Browser **Use** commits the prepared image bytes, resolved colors and managed settings shown by the current successful preview, without resolving the Profile/Source again. Input versions are checked under the mutation lock before any publication. If local Profile/config/image/source-root inputs changed, the sample refreshes and you must choose Use again after reviewing it. Loading, failed or obsolete previews cannot apply. A captured named-theme result stays fixed even if its original theme file changes; reselect to resolve it again. Remote inputs are captured once, not fetched again during Use.
+
+The guarantee covers managed content, not pixel-perfect Ghostty rendering or inherited settings. Standalone CLI `apply` still resolves normally; it has no reviewed result. Reselect to retry errors or refresh remote content. History replay assigns no active-profile marker.
 
 Details: [preview limitations](https://giovannicaiazzo01.github.io/Ghostty-wall/terminal-browser/#previews).
 
