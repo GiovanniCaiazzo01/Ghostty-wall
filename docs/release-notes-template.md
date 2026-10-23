@@ -1,50 +1,48 @@
-# Ghostty Wall v1.2.0
+# Ghostty Wall v1.3.0
 
-Six UX improvements make everyday Profile management more responsive and keep operations inside the terminal interface.
+Predictable, readable Profiles: review the result, save without applying, or explicitly use exactly what you reviewed.
 
 ## Highlights
 
-- **Automatic Profile previews:** initial selection and arrow navigation prepare the wallpaper and matching colors in the background. Ghostty gets a full-color, linear-light composited sample; obsolete results cannot replace the current selection. Navigation and quit remain available while loading.
-- **Full-screen Profile workflows:** create, edit, image picking, rename, duplicate and delete stay inside the TUI. Long paths and errors have scrollable details.
-- **Cargo and release-installer updates:** update the invoked installation, including custom prefixes, with verified staging, ownership checks and executable/metadata rollback. Cargo builds the official stable tag rather than overwriting another installation on PATH.
-- **Contained maintenance:** initialization, reports, History, Doctor and updates show full-screen progress/results, explicit consent and clear cancellation boundaries. Restart Ghostty Wall after an update.
-- **Quieter new wallpapers:** new image Profiles and newly initialized Welcome default to wallpaper opacity **0.05**, previously 0.1. Explicit draft choices win. Existing Profiles, omitted settings, edits, duplicates, replay and terminal transparency are unchanged.
-- **Clearer CLI choices:** separated headings/options, explicit defaults, wrapped paths and restrained terminal colors. `NO_COLOR`, redirected interaction and JSON retain plain output.
-
-The management browser supports **60×18** and larger; Create/Edit forms retain their separate **40×12** minimum. Archive decompression limits now include tar headers and extension records before parsing.
+- **Consistent Save / Save and use / Cancel:** full-screen Create/Edit share these actions, including compact layouts. Save does not activate; Save and use asks for confirmation, defaulting to Back to editor. Cancel discards unpublished changes.
+- **Readable automatic colors:** `kmeans-v4` accounts for wallpaper brightness, alpha and explicit opacity when correcting foreground, ANSI text colors and cursor toward a 4.5:1 target. Customized colors remain untouched. Samples warn when image strength or customized colors prevent sufficient contrast.
+- **Reviewed-result identity:** full-screen browser Use commits the captured image bytes, resolved colors and managed settings, without another Source/theme resolution. Changed watched inputs require a refreshed sample and another explicit Use. Loading, failed and obsolete previews cannot apply. Standalone CLI apply still resolves normally.
+- **Source maintenance:** inspect definitions and dependent Profiles, edit locations, check candidate availability, and confirm removal of unused Sources. Source removal preserves original images, retained assets and History.
+- **Less unnecessary work:** browser no longer redraws while idle; palette clustering stops at stable centers; editor opacity changes reuse image analysis. A controlled debug clustering case improved from 4.46 s to 1.02 s, not a universal theme-switch speed claim.
 
 ## Install and update
 
-Prebuilt target: **Linux x86_64**. Download and verify either archive with its matching checksum:
+Prebuilt target: **Linux x86_64**. Verify the archive using its matching checksum:
 
-- `ghostty-wall-v1.2.0-x86_64-unknown-linux-gnu.tar.gz`
-- `ghostty-wall-v1.2.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
+- `ghostty-wall-v1.3.0-x86_64-unknown-linux-gnu.tar.gz`
+- `ghostty-wall-v1.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256`
 - `ghostty-wall-x86_64-unknown-linux-gnu.tar.gz` (stable alias)
 - `ghostty-wall-x86_64-unknown-linux-gnu.tar.gz.sha256`
 
-Run `sha256sum --check FILE.tar.gz.sha256` beside the downloaded archive, extract it, then run the included `install.sh`. Initialization remains explicit: `ghostty-wall init`.
+Run `sha256sum --check FILE.tar.gz.sha256` beside the archive, extract it, then run the included `install.sh`. Initialization remains explicit: `ghostty-wall init`.
 
-Existing release-installer users can run `ghostty-wall update --check` then `ghostty-wall update`. To upgrade an older Cargo installation that does not yet support self-update:
+Existing installations: `ghostty-wall update --check`, then `ghostty-wall update`. Restart running processes afterward. Older Cargo installations can use:
 
 ```sh
-cargo install --git https://github.com/GiovanniCaiazzo01/Ghostty-wall --tag v1.2.0 --locked
+cargo install --git https://github.com/GiovanniCaiazzo01/Ghostty-wall --tag v1.3.0 --locked
 ```
 
-Preserve your original `--root` if using a custom Cargo prefix. Cargo builds require Rust **1.88+**, a native linker, network access and temporary disk space. From v1.2.0, supported Cargo installations can use `ghostty-wall update` for subsequent releases.
-
-[Updated documentation](https://giovannicaiazzo01.github.io/Ghostty-wall/) · [Changelog](https://github.com/GiovanniCaiazzo01/Ghostty-wall/blob/v1.2.0/CHANGELOG.md) · [Source at v1.2.0](https://github.com/GiovanniCaiazzo01/Ghostty-wall/tree/v1.2.0)
+Preserve your original `--root` for a custom Cargo prefix. Source builds require Rust **1.88+**, a native linker, network access and temporary disk space. macOS remains experimental, without a supported installer or prebuilt artifact.
 
 ## Compatibility and limitations
 
-- No persisted-format migration or seed-algorithm change. Existing version 1/2 Profiles and History remain readable. Back up the complete Managed Root before downgrading; older readers may not understand version 2 Intent or newer generated-color provenance.
-- Linux is supported; **macOS remains experimental**. Native macOS and non-x86_64 updater runtime have not been verified. Source-build availability does not imply a prebuilt artifact or verified platform behavior.
-- Samples are approximate, read-only and **not live Ghostty reload**. Unsupported terminals show a labelled color-cell fallback, not a photograph. Native blending, Display P3, user configuration, fonts, blur and desktop transparency can differ. Lower image opacity fades toward the background; a light background can become lighter rather than darker.
-- Updates change Ghostty Wall, not Ghostty or managed user data. Keep other installers idle. Failed publication rolls back binary and metadata, but this is **not a crash-atomic multi-file transaction**. Forced termination/power loss or failed rollback may require inspecting retained `.ghostty-wall-update-*` recovery files. Restart running processes after replacement.
+- Existing version 1/2 Profiles remain readable and are not migrated. New resolutions of automatic colors use **kmeans-v4**. Saved History keeps replaying its original resolved colors, including v1–v3 provenance.
+- **Back up the complete Managed Root before downgrading. Older binaries may reject History containing v4 Activations.**
+- Contrast uses a conservative managed linear-sRGB model. It includes all source pixels, even highlights outside the current crop. Selection uses its solid background. Customized backgrounds may invalidate automatic contrast bounds. High opacity may make 4.5:1 impossible even with white text; lower opacity explicitly rather than expecting silent changes.
+- Omitted opacity remains unknown: generation keeps flat-background correction; the sample illustrates 1.0. Native blending, Display P3, desktop transparency, overrides, inherited settings, faint/dim text and application-specific colors are not certified. This is not a universal accessibility guarantee.
+- Internal samples remain approximate and are **not live Ghostty draft sessions**. Managed-content identity does not promise pixel-perfect effective rendering. Full-screen management supports 60×18; Create/Edit support 40×12.
+- Activation and reload are separate outcomes. A failed/unavailable reload does not undo committed History. D-Bus reload was visibly checked on one and two owned Ghostty 1.3.1 windows; direct custom-config launches may require manual reload. A real systemd user-service launch was unavailable in the isolated test environment; automated adapter tests cover that path and failure reports.
+- Updates replace Ghostty Wall, not Ghostty or user data. Keep other installers idle. Binary/metadata publication supports rollback but is not crash-atomic; interruption may require inspecting retained recovery files.
 
 ## Verification
 
-The integrated runtime passed Rust formatting, all-target/all-feature Clippy/tests, 97 release-binary PTYs, targeted deletion/publication/updater fault tests, Bash/installer checks and generated-site checks. Ten blocked-preview trials measured current-selection response below 21 ms and exit below 1 ms on the test machine; these are observations, not universal performance guarantees.
+[Validation record](https://github.com/GiovanniCaiazzo01/Ghostty-wall/blob/v1.3.0/docs/release-1.3.0-validation.md) distinguishes exact-candidate tests, local artifacts, observed Ghostty pixels, adapter acceptance and unverified routes. [Release plan #7](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/7) links implementation PRs #13, #15, #16 and #17; integrated validation is tracked in #11.
 
-Independent Linux Ghostty 1.3.1 checks inspected 28 captures at compact/wide sizes, including fixed/random photographs, managed colors, nested reports, original-image view and below-minimum guidance. Those captures identify the **pre-version-bump integrated binary**, not the downloadable release binary; runtime source is unchanged by the version bump. No private screenshots or logs are shipped.
+The release workflow repeats formatting, all-target/all-feature Clippy and Rust tests, release-binary PTYs, Bash/installer checks, site checks, package checksums and disposable installed `--version`/`init`/`doctor` before uploading Linux assets. Published workflow artifacts have a different build identity from the local candidate and are verified separately.
 
-The release workflow repeats formatting, Clippy, Rust tests, Bash/installer and site checks, builds the locked versioned binary, runs release PTYs, verifies both package checksums and checks disposable installation, `--version`, `init` and `doctor` before uploading assets. Public workflow results are available under [GitHub Actions](https://github.com/GiovanniCaiazzo01/Ghostty-wall/actions).
+[Documentation](https://giovannicaiazzo01.github.io/Ghostty-wall/) · [Changelog](https://github.com/GiovanniCaiazzo01/Ghostty-wall/blob/v1.3.0/CHANGELOG.md) · [Source](https://github.com/GiovanniCaiazzo01/Ghostty-wall/tree/v1.3.0)
