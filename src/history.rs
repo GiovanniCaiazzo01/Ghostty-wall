@@ -610,8 +610,10 @@ fn validate_color(
             Sha256Digest::from_bytes(hash.finalize().into()).to_string() == *content_sha256
         }
         Some(ColorResolution::Generated { algorithm }) => {
-            matches!(algorithm.as_str(), "kmeans-v1" | "kmeans-v2" | "kmeans-v3")
-                && has_asset
+            matches!(
+                algorithm.as_str(),
+                "kmeans-v1" | "kmeans-v2" | "kmeans-v3" | "kmeans-v4"
+            ) && has_asset
                 && matches!(environment.wallpaper(), Some(WallpaperManifest::Image(_)))
         }
     }

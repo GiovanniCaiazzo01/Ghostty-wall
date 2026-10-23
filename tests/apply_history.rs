@@ -111,8 +111,14 @@ fn new_generated_provenance_preserves_readability_of_old_history() {
         .managed
         .join("history/activations/act-v1-0000000000000001.json");
     let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
-    assert_eq!(value["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_eq!(value["color_resolution"]["algorithm"], "kmeans-v4");
     assert!(inspect_history(&root.managed).is_ok());
+    value["color_resolution"]["algorithm"] = "kmeans-v3".into();
+    fs::write(&record, value.to_string()).unwrap();
+    assert!(
+        inspect_history(&root.managed).is_ok(),
+        "existing v3 History stays readable"
+    );
     value["color_resolution"]["algorithm"] = "kmeans-v2".into();
     fs::write(&record, value.to_string()).unwrap();
     assert!(

@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+### Fixed
+
+- Automatic `kmeans-v4` text colors account for linear-sRGB wallpaper brightness, alpha and selected opacity; customized slots and historical replay remain unchanged. Samples warn when contrast is insufficient, including recipes where image opacity is too high for automatic colors alone.
+- Profile browser no longer repaints while idle. Palette clustering stops at stable centers without changing v1–v3 palette output; editor opacity changes reuse image analysis.
+
+### Compatibility and limitations
+
+- New generated-color Activations use `kmeans-v4` provenance. Existing v1–v3 History remains readable; older binaries may reject v4 Activations. Back up the Managed Root before downgrading.
+- Readability uses a conservative managed linear-sRGB model, not effective Ghostty settings or a universal accessibility guarantee. Real Ghostty visual validation of v4 remains pending; see issue #9.
+
 ## [1.2.0] - 2026-09-28
 
 ### Added

@@ -126,7 +126,7 @@ fn assert_readable(plan: &Value) {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     };
     let colors = &plan["environment"]["manifest"]["colors"];
-    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
     assert_eq!(
         plan["environment"]["manifest"]["wallpaper"]["mode"],
         "image"

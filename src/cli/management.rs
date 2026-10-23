@@ -35,6 +35,7 @@ pub(super) fn run(
     refresh(application, browser, &mut view, &mut previews);
     let graphics = TerminalGraphics::from_environment() == TerminalGraphics::Ghostty;
     let mut image_shown = false;
+    let mut redraw = true;
     loop {
         let size = screen.terminal.size()?;
         let area = tui::preview_area(
@@ -45,15 +46,20 @@ pub(super) fn run(
             && previews.area != area
         {
             previews.resize(browser, &mut view, area);
+            redraw = true;
         }
         let completed = previews.poll(&mut view);
+        redraw |= completed;
         if image_shown && (completed || view.sample.is_none() || area.is_none()) {
             clear_image(screen.terminal.backend_mut())?;
             image_shown = false;
         }
-        screen
-            .terminal
-            .draw(|frame| tui::draw(frame, browser, &view))?;
+        if redraw {
+            screen
+                .terminal
+                .draw(|frame| tui::draw(frame, browser, &view))?;
+            redraw = false;
+        }
         if graphics
             && !image_shown
             && let (Some(sample), Some(area)) = (&view.sample, area)
@@ -68,6 +74,7 @@ pub(super) fn run(
             Event::Resize(_, _) => crossterm::event::KeyEvent::from(KeyCode::Null),
             _ => continue,
         };
+        redraw = true;
         let size = screen.terminal.size()?;
         if tui::management_needs_resize(size.width, size.height) {
             if editor::interrupt(key) || key.code == KeyCode::Esc {

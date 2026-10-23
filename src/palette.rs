@@ -34,19 +34,80 @@ pub(crate) struct PaletteError;
 
 #[cfg(test)]
 fn generate_kmeans_v1(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
-    generate(bytes, false, false)
+    generate(bytes, false, false).map(|generated| generated.colors)
 }
 
 #[cfg(test)]
 fn generate_kmeans_v2(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
-    generate(bytes, true, false)
+    generate(bytes, true, false).map(|generated| generated.colors)
 }
 
 pub(crate) fn generate_kmeans_v3(bytes: &[u8]) -> Result<ColorsManifest, PaletteError> {
+    generate(bytes, true, true).map(|generated| generated.colors)
+}
+
+/// Image analysis is cached by the editor; opacity changes need no decoding or clustering.
+#[derive(Clone)]
+pub(crate) struct GeneratedPalette {
+    colors: ColorsManifest,
+    brightest: f64,
+}
+
+impl GeneratedPalette {
+    pub(crate) fn for_opacity(&self, opacity: u32) -> ColorsManifest {
+        let background = self.colors.background();
+        let base = relative_luminance(background.as_rgb());
+        let brightest = base + f64::from(opacity) / 1_000_000.0 * (self.brightest - base);
+        let correct = |value: Color| {
+            let candidate = value.as_rgb();
+            // All v3 backgrounds are dark. Moving text toward white preserves its hue
+            // where possible; if even white fails, preview reports the opacity problem.
+            let passes = |rgb| (relative_luminance(rgb) + 0.05) / (brightest + 0.05) >= 4.5;
+            if passes(candidate) {
+                return value;
+            }
+            let (mut low, mut high) = (0, 255);
+            while low < high {
+                let middle = (low + high) / 2;
+                if passes(mix(candidate, [255; 3], middle, 255)) {
+                    high = middle;
+                } else {
+                    low = middle + 1;
+                }
+            }
+            color(mix(candidate, [255; 3], low, 255)).expect("RGB is a valid color")
+        };
+        ColorsManifest::new(
+            background,
+            correct(self.colors.foreground()),
+            self.colors.palette().map(correct),
+        )
+        .with_cursor(correct(self.colors.cursor().expect("generated cursor")))
+        .with_selection_background(
+            self.colors
+                .selection_background()
+                .expect("generated selection"),
+        )
+        .with_selection_foreground(
+            self.colors
+                .selection_foreground()
+                .expect("generated selection"),
+        )
+    }
+}
+
+pub(crate) fn analyze(bytes: &[u8]) -> Result<GeneratedPalette, PaletteError> {
     generate(bytes, true, true)
 }
 
-fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<ColorsManifest, PaletteError> {
+pub(crate) fn generate_kmeans_v4(
+    bytes: &[u8],
+    opacity: u32,
+) -> Result<ColorsManifest, PaletteError> {
+    Ok(analyze(bytes)?.for_opacity(opacity))
+}
+
+fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<GeneratedPalette, PaletteError> {
     let format = image::guess_format(bytes).map_err(|_| PaletteError)?;
     if !matches!(format, image::ImageFormat::Png | image::ImageFormat::Jpeg) {
         return Err(PaletteError);
@@ -156,7 +217,18 @@ fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<ColorsManifest, 
         };
     }
 
-    Ok(ColorsManifest::new(
+    let base_luminance = relative_luminance(background);
+    // ponytail: whole-image bound includes cropped-out highlights; use viewport-aware
+    // analysis only if this conservative correction proves too strong.
+    let brightest = image
+        .pixels()
+        .fold(base_luminance, |brightest, (_, _, pixel)| {
+            let alpha = f64::from(pixel[3]) / 255.0;
+            let composed = base_luminance * (1.0 - alpha)
+                + relative_luminance([pixel[0], pixel[1], pixel[2]]) * alpha;
+            brightest.max(composed)
+        });
+    let colors = ColorsManifest::new(
         color(background)?,
         color(foreground)?,
         palette
@@ -168,7 +240,8 @@ fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<ColorsManifest, 
     )
     .with_cursor(color(foreground)?)
     .with_selection_background(color(selection_background)?)
-    .with_selection_foreground(color(selection_foreground)?))
+    .with_selection_foreground(color(selection_foreground)?);
+    Ok(GeneratedPalette { colors, brightest })
 }
 
 fn kmeans(samples: &[Rgb]) -> [Rgb; CLUSTERS] {
@@ -196,6 +269,7 @@ fn kmeans(samples: &[Rgb]) -> [Rgb; CLUSTERS] {
     }
 
     for _ in 0..ITERATIONS {
+        let previous = centers;
         let mut sums = [[0_u64; 3]; CLUSTERS];
         let mut counts = [0_u64; CLUSTERS];
         for sample in samples {
@@ -213,6 +287,9 @@ fn kmeans(samples: &[Rgb]) -> [Rgb; CLUSTERS] {
                 centers[index][channel] =
                     ((sums[index][channel] + counts[index] / 2) / counts[index]) as u8;
             }
+        }
+        if centers == previous {
+            break;
         }
     }
     centers
@@ -288,16 +365,20 @@ fn contrast(left: Rgb, right: Rgb) -> f64 {
     (left.max(right) + 0.05) / (left.min(right) + 0.05)
 }
 
-fn relative_luminance(color: Rgb) -> f64 {
-    let linear = |channel: u8| {
-        let value = f64::from(channel) / 255.0;
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+pub(crate) fn relative_luminance(color: Rgb) -> f64 {
+    static LINEAR: std::sync::OnceLock<[f64; 256]> = std::sync::OnceLock::new();
+    let table = LINEAR.get_or_init(|| {
+        std::array::from_fn(|channel| {
+            let value = channel as f64 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    });
+    let [r, g, b] = color.map(|c| table[usize::from(c)]);
+    0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
 fn luminance(color: Rgb) -> u32 {
@@ -312,6 +393,79 @@ fn color(value: Rgb) -> Result<Color, PaletteError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composition_policy_covers_bright_dark_saturated_mixed_and_alpha_images() {
+        use image::{DynamicImage, Rgba, RgbaImage};
+        for pixels in [
+            vec![[0, 0, 0, 255]],
+            vec![[255, 255, 255, 255]],
+            vec![[128, 128, 128, 255]],
+            vec![[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]],
+            vec![[0, 0, 0, 255], [255, 255, 255, 255]],
+            vec![[255, 255, 255, 0]],
+            vec![[255, 255, 255, 128], [0, 0, 0, 255]],
+        ] {
+            let image = RgbaImage::from_fn(pixels.len() as u32, 1, |x, _| Rgba(pixels[x as usize]));
+            let mut bytes = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(image)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            let generated = analyze(bytes.get_ref()).unwrap();
+            assert_eq!(generated.for_opacity(0), generated.colors);
+            for opacity in [0, 50_000, 100_000, 200_000, 1_000_000] {
+                let colors = generated.for_opacity(opacity);
+                let base = relative_luminance(colors.background().as_rgb());
+                let brightest =
+                    base + f64::from(opacity) / 1_000_000.0 * (generated.brightest - base);
+                for text in colors
+                    .palette()
+                    .iter()
+                    .copied()
+                    .chain([colors.foreground(), colors.cursor().unwrap()])
+                {
+                    if 1.05 / (brightest + 0.05) < 4.5 {
+                        assert_eq!(
+                            text.as_rgb(),
+                            [255; 3],
+                            "best possible light text when opacity is too high"
+                        );
+                    } else {
+                        assert!(
+                            (relative_luminance(text.as_rgb()) + 0.05) / (brightest + 0.05) >= 4.5
+                        );
+                    }
+                }
+                assert!(
+                    contrast(
+                        colors.selection_background().unwrap().as_rgb(),
+                        colors.selection_foreground().unwrap().as_rgb()
+                    ) >= 4.5
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn converged_clustering_keeps_exact_centers() {
+        let samples = vec![[80, 120, 160]; MAX_SAMPLES];
+        let start = std::time::Instant::now();
+        assert_eq!(kmeans(&samples), [[80, 120, 160]; CLUSTERS]);
+        eprintln!(
+            "clustering {} identical samples: {:?}",
+            samples.len(),
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn v3_fixture_stays_byte_compatible_for_historical_provenance() {
+        let colors = generate_kmeans_v3(include_bytes!("../tests/fixtures/palette.png")).unwrap();
+        assert_eq!(colors.background().to_string(), "090b0f");
+        assert_eq!(colors.foreground().to_string(), "eecd6c");
+        assert_eq!(colors.palette()[1].to_string(), "cc4f53");
+        assert_eq!(colors.palette()[8].to_string(), "807962");
+    }
 
     #[test]
     fn v1_fixture_stays_byte_compatible_for_historical_provenance() {

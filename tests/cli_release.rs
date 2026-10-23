@@ -680,7 +680,7 @@ fn cli_applies_generated_colors_from_local_profile() {
     assert_success(&plan);
     let plan: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
     assert_eq!(plan["asset"]["media_type"], "image/png");
-    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v3");
+    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
     assert!(
         plan.pointer("/environment/manifest/colors/background")
             .is_some()

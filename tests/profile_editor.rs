@@ -108,6 +108,24 @@ impl Fixture {
         path
     }
 }
+#[test]
+fn opacity_updates_automatic_colors_but_keeps_overrides_and_matches_saved_resolution() {
+    let fixture = Fixture::new();
+    let mut editor = fixture.open();
+    editor.set_number(N::WallpaperOpacity, "0.0").unwrap();
+    let flat = editor.preview().unwrap();
+    editor.set_color(6, "123456").unwrap();
+    editor.set_number(N::WallpaperOpacity, "0.05").unwrap();
+    let preview = editor.preview().unwrap();
+    assert_ne!(
+        flat.colors().unwrap().palette()[0],
+        preview.colors().unwrap().palette()[0]
+    );
+    assert_eq!(preview.colors().unwrap().palette()[1].to_string(), "123456");
+    fixture.workflow.save_draft(editor.draft()).unwrap();
+    assert_eq!(preview, fixture.resolve("boy").0);
+}
+
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut result = BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {

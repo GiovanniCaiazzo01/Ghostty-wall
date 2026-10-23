@@ -529,7 +529,7 @@ fn colors_are_image_coordinated_complete_and_repeatably_resolvable() {
             plan["environment"]["manifest"]["wallpaper"]["opacity_millionths"],
             50_000
         );
-        assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v3");
+        assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
     }
     assert_eq!(colorful["environment"], s.plan("colorful")["environment"]);
     assert_eq!(snapshot(&s.root()), before);
