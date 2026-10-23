@@ -161,6 +161,9 @@ class EditPublicPath(EditFixture):
 
     def test_all_color_slots_reset_and_replacement_use_public_resolution_oracle(self):
         self.cli("create", "reference", input=f"i\npath:{self.original}\ns\nn\n")
+        # Composition-aware colors require the same opacity as the edited Profile.
+        reference_profile = self.root / "profiles/reference.toml"
+        reference_profile.write_text(re.sub(r"(?m)^opacity = [0-9.]+$", "opacity = 0.234567", reference_profile.read_text()))
         reference = self.plan("reference")["environment"]["manifest"]["colors"]
         before = self.snapshot()
         session = self.open()
