@@ -40,7 +40,15 @@ impl Sandbox {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(input).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input)
+            .unwrap_or_else(|error| {
+                // A correctly rejected command may exit before consuming confirmation input.
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+            });
         child.wait_with_output().unwrap()
     }
     fn ok(&self, args: &[&str]) -> Output {
@@ -68,6 +76,18 @@ impl Drop for Sandbox {
 
 fn bytes(path: impl AsRef<Path>) -> Vec<u8> {
     fs::read(path).unwrap()
+}
+
+#[test]
+fn early_cli_exit_preserves_status_despite_unconsumed_stdin() {
+    let s = Sandbox::new();
+    // Larger than pipe capacity: --version exits without consuming any input.
+    let result = s.run_input(&["--version"], &vec![b'x'; 1_048_576]);
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&result.stdout).trim(),
+        concat!("ghostty-wall ", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]

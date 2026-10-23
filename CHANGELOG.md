@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-23
+
+### Added
+
+- Consistent full-screen Save without applying, Save and use with default-Back confirmation, and Cancel across Profile creation/editing, including compact layouts.
+- Source inspection, complete-definition editing, listing-only availability checks and confirmed removal of unused Sources; preserve original images and replayable History.
+
 ### Fixed
 
 - Browser Use commits the reviewed image bytes, resolved colors and managed settings without resolving again. Input changes are checked under the mutation lock and require a refreshed preview and another explicit Use; loading and failed previews cannot apply. Standalone CLI apply retains normal resolution.
@@ -15,7 +22,7 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 ### Compatibility and limitations
 
 - New generated-color Activations use `kmeans-v4` provenance. Existing v1–v3 History remains readable; older binaries may reject v4 Activations. Back up the Managed Root before downgrading.
-- Readability uses a conservative managed linear-sRGB model, not effective Ghostty settings or a universal accessibility guarantee. Real Ghostty visual validation of v4 remains pending; see issue #9.
+- Readability uses a conservative managed linear-sRGB model, not effective Ghostty settings or a universal accessibility guarantee. Ghostty 1.3.1 linear-corrected rendering was compared with the model, and D-Bus reload visibly updated one and two owned windows. Native/P3 blending, desktop transparency, dim/application-specific text and experimental macOS remain outside that proof. See [release validation](docs/release-1.3.0-validation.md).
 
 ## [1.2.0] - 2026-09-28
 
