@@ -16,7 +16,7 @@ Existing Profiles, customized colors, captured Environments and History are pres
 
 ## Availability
 
-Version metadata is prepared; release assets are not published by merging it. After publication, use `ghostty-wall update` or the [Linux x86_64 installer](https://giovannicaiazzo01.github.io/Ghostty-wall/installation/). macOS remains experimental.
+Linux x86_64: use `ghostty-wall update` or the [installer](https://giovannicaiazzo01.github.io/Ghostty-wall/installation/). Release archives include matching SHA-256 checksums. macOS remains experimental.
 
 ## Validation
 
