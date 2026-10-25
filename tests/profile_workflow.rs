@@ -153,7 +153,7 @@ fn save_apply_reload_are_distinct_and_active_deletion_fails_closed() {
     let workflow = ProfileWorkflows::load(paths.clone()).unwrap();
     let mut draft = workflow.create("generated").unwrap();
     workflow.generate_image(&mut draft, seed()).unwrap();
-    assert!(draft.document().contains("gradient-v1"));
+    assert!(draft.document().contains("composition-v1"));
     let id = workflow.save(draft).unwrap();
     assert!(matches!(
         workflow.use_saved(&id, |_| Err::<ghostty_wall::apply::ApplyOutcome, _>(
@@ -250,8 +250,8 @@ fn generated_replacement_preserves_manual_slots_and_original_image() {
     let mut draft = workflow.create("change-me").unwrap();
     workflow.generate_image(&mut draft, seed()).unwrap();
     let revised = draft.document().replace(
-        "mode = \"generated\"",
-        "mode = \"generated\"\n[colors.overrides]\nbackground = \"abcdef\"",
+        "algorithm = \"oklch-v2\"",
+        "algorithm = \"oklch-v2\"\n[colors.overrides]\nbackground = \"abcdef\"",
     );
     draft.set_document(workflow.config(), revised).unwrap();
     workflow.save(draft).unwrap();

@@ -210,6 +210,64 @@ fn invalid_claims_and_aliased_sources_are_not_cleanup_authority() {
 }
 
 #[test]
+fn composition_recipe_is_distinct_and_saved_bytes_are_authoritative() {
+    use ghostty_wall::{
+        domain::WallpaperIntent,
+        init::{InitPaths, init},
+        profile_workflow::ProfileWorkflows,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let paths = InitPaths {
+        home: home.path().to_owned(),
+        xdg_config_home: Some(home.path().join("config")),
+    };
+    init(&paths).unwrap();
+    let root = paths.managed_root();
+    let workflow = ProfileWorkflows::load(paths).unwrap();
+    let mut draft = workflow.create("composition").unwrap();
+    workflow
+        .generate_image(&mut draft, Sha256Digest::from_bytes([0; 32]))
+        .unwrap();
+    let bytes = draft.staged_image().unwrap().to_vec();
+    let document = draft.document().to_owned();
+    let parsed = parse_profile_toml(&document).unwrap();
+    let Some(WallpaperIntent::Source {
+        owned_image: Some(owned),
+        ..
+    }) = parsed.wallpaper
+    else {
+        panic!("owned generated image expected")
+    };
+    let recipe = owned.generation.unwrap();
+    assert_eq!(recipe.algorithm, "composition-v1");
+    assert_eq!((recipe.width, recipe.height), (768, 512));
+    workflow.save(draft).unwrap();
+    assert_eq!(workflow.edit("composition").unwrap().document(), document);
+    assert_eq!(
+        fs::read(root.join("profiles/composition.png")).unwrap(),
+        bytes
+    );
+    // A different recipe seed is metadata, not an instruction to regenerate on plan/apply.
+    let changed = document.replace(&"0".repeat(64), &"1".repeat(64));
+    fs::write(root.join("profiles/composition.toml"), changed).unwrap();
+    let resolved = plan(home.path(), "composition");
+    assert_eq!(
+        resolved["image_effects"]["source_sha256"],
+        owned.sha256.to_string()
+    );
+    assert_eq!(resolved["asset"], plan(home.path(), "composition")["asset"]);
+    assert_eq!(
+        fs::read(root.join("profiles/composition.png")).unwrap(),
+        bytes
+    );
+    for algorithm in ["gradient-v1", "composition-v1"] {
+        let valid = document.replace("composition-v1", algorithm);
+        assert!(parse_profile_toml(&valid).is_ok());
+        assert!(parse_profile_toml(&valid.replace(algorithm, "composition-v2")).is_err());
+    }
+}
+
+#[test]
 fn strict_versions_and_metadata_do_not_migrate_old_profiles() {
     let old = "schema_version = 1\n[wallpaper]\nmode = \"source\"\nsource = \"welcome\"\nselection = \"path\"\npath = \"welcome.png\"\n[colors]\nmode = \"generated\"\n";
     assert!(parse_profile_toml(old).is_ok());

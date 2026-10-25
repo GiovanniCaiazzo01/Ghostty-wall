@@ -58,7 +58,13 @@ class Session:
         os.write(self.master, text.encode())
 
     def finish(self):
-        self.proc.wait(timeout=20)
+        # Drain concurrent preview/marker frames while waiting: otherwise a full
+        # PTY can block the child's final write before it consumes queued quit.
+        deadline = time.monotonic() + 20
+        while self.proc.poll() is None and time.monotonic() < deadline:
+            if select.select([self.master], [], [], 0.05)[0]:
+                self.data.extend(os.read(self.master, 65536))
+        self.proc.wait(timeout=1)
         # Use stays in the management center; consume the final quit frame too,
         # even when an earlier prompt already emitted LeaveAlternateScreen.
         while select.select([self.master], [], [], 0)[0]:

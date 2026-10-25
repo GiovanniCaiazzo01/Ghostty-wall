@@ -2339,13 +2339,27 @@ fn activation_report(
 fn completion_report(id: &IntentId, outcome: crate::profile_workflow::ProfileOutcome) -> String {
     match outcome {
         crate::profile_workflow::ProfileOutcome::Saved => saved_report(id),
-        crate::profile_workflow::ProfileOutcome::SavedAndApplied { activation, reload } => {
-            activation_report(activation, reload, Some(id))
+        crate::profile_workflow::ProfileOutcome::SavedAndApplied {
+            activation,
+            reload,
+            contrast_infeasible,
+        } => {
+            let mut report = activation_report(activation, reload, Some(id));
+            if contrast_infeasible {
+                report.push_str("Warning: automatic contrast infeasible; non-conforming fallback, NOT a valid 4.5:1 palette. Adjust opacity/darkening explicitly.\n");
+            }
+            report
         }
     }
 }
 
 fn print_apply_outcome(outcome: ApplyOutcome, output: &mut impl Write) -> Result<(), CliError> {
+    if outcome.contrast_infeasible() {
+        writeln!(
+            output,
+            "Warning: automatic contrast infeasible; non-conforming fallback, NOT a valid 4.5:1 palette. Adjust opacity/darkening explicitly."
+        )?;
+    }
     write_text(
         output,
         &activation_report(outcome.activation_id(), outcome.reload_outcome(), None),

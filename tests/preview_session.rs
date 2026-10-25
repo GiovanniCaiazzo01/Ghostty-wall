@@ -52,6 +52,11 @@ impl Fixture {
         fs::write(&original, JPEG).unwrap();
         let mut boy = workflow.create("boy").unwrap();
         workflow.import_image(&mut boy, &original).unwrap();
+        // This fixture exercises byte-exact JPEG preview staging, without image-space effects.
+        let mut document: toml_edit::DocumentMut = boy.document().parse().unwrap();
+        document["wallpaper"]["effects"]["darken"] = toml_edit::value(0);
+        boy.set_document(workflow.config(), document.to_string())
+            .unwrap();
         workflow.save(boy).unwrap();
         let fixture = Self {
             _temp: temp,

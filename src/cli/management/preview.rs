@@ -1,7 +1,10 @@
-//! One in-flight preparation and one replaceable pending selection; no persisted cache.
+//! One in-flight preparation, one replaceable pending selection, bounded read-only reuse.
 
 use super::*;
 use std::sync::{Arc, Condvar, Mutex};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone)]
 struct Request {
@@ -38,6 +41,7 @@ impl Previews {
             .name("profile-preview".into())
             .spawn(move || {
                 let mut previous: Option<(Request, Prepared)> = None;
+                let mut cache = PreparedCache::default();
                 loop {
                     let request = {
                         let (lock, wake) = &*worker;
@@ -68,18 +72,28 @@ impl Previews {
                         }
                         state.pending.take().unwrap()
                     };
-                    let mut result = match &previous {
-                        Some((last, prepared))
-                            if last.generation == request.generation && !prepared.changed() =>
-                        {
-                            Ok(prepared.clone())
-                        }
-                        _ => prepare(&request.profile, request.seed).map_err(|e| e.to_string()),
+                    let reused = previous
+                        .as_ref()
+                        .filter(|(last, prepared)| {
+                            last.generation == request.generation && !prepared.changed()
+                        })
+                        .map(|(last, prepared)| (last.area, prepared.clone()))
+                        .or_else(|| cache.take(&request));
+                    let same_area = reused
+                        .as_ref()
+                        .is_some_and(|(area, _)| *area == request.area);
+                    let mut result = match reused {
+                        Some((_, prepared)) => Ok(prepared),
+                        None => prepare(&request.profile, request.seed).map_err(|e| e.to_string()),
                     };
-                    if let Ok(prepared) = &mut result
+                    if !same_area
+                        && let Ok(prepared) = &mut result
                         && let Err(error) = prepared.sample.prepare_graphics(request.area)
                     {
                         result = Err(error.to_string());
+                    }
+                    if let Ok(prepared) = &result {
+                        cache.insert(request.clone(), prepared.clone());
                     }
                     previous = result.as_ref().ok().map(|p| (request.clone(), p.clone()));
                     let mut state = worker.0.lock().unwrap();
@@ -233,6 +247,53 @@ impl Prepared {
     }
 }
 
+// ponytail: two recent Profiles, at most 32 MiB of image buffers in this cache.
+// Larger images still preview normally, without retention for later visits.
+#[derive(Default)]
+struct PreparedCache(std::collections::VecDeque<(Request, Prepared)>);
+
+impl PreparedCache {
+    fn take(&mut self, request: &Request) -> Option<(ratatui::layout::Rect, Prepared)> {
+        self.0.retain(|(_, prepared)| !prepared.changed());
+        let index = self
+            .0
+            .iter()
+            .position(|(last, _)| last.profile == request.profile && last.seed == request.seed)?;
+        let (last, prepared) = self.0.remove(index)?;
+        Some((last.area, prepared))
+    }
+
+    fn insert(&mut self, request: Request, prepared: Prepared) {
+        // Remote content and named themes are refreshed on re-selection, not
+        // covered by the local file-version watcher.
+        if uses_github_plan(&prepared.plan)
+            || prepared
+                .plan
+                .pointer("/color_resolution/kind")
+                .and_then(Value::as_str)
+                == Some("theme")
+        {
+            return;
+        }
+        self.0
+            .retain(|(last, _)| last.profile != request.profile || last.seed != request.seed);
+        self.0.push_back((request, prepared));
+        while self.0.len() > 2
+            || self
+                .0
+                .iter()
+                .map(|(_, p)| {
+                    p.sample.retained_bytes()
+                        + p.asset_bytes.as_ref().map_or(0, |bytes| bytes.len())
+                })
+                .sum::<usize>()
+                > 32 * 1024 * 1024
+        {
+            self.0.pop_front();
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct FileVersion {
     path: PathBuf,
@@ -298,8 +359,12 @@ fn prepare(id: &IntentId, seed: ResolutionSeed) -> Result<Prepared, CliError> {
     let manifest =
         crate::codec::manifest::decode(&serde_json::to_vec(&plan["environment"]["manifest"])?)
             .map_err(|e| CliError::Intent(e.to_string()))?;
-    let sample = Sample::for_preview(manifest, image.as_deref())
+    let mut sample = Sample::for_preview(manifest, image.as_deref())
         .map_err(|e| CliError::Input(e.to_string()))?;
+    sample.contrast_infeasible = plan
+        .pointer("/palette_contrast/status")
+        .and_then(Value::as_str)
+        == Some("infeasible");
     if files.iter().any(FileVersion::changed) {
         return Err(CliError::Input(
             "Profile/image changed during preparation; select again.".into(),

@@ -6,6 +6,8 @@ use image::GenericImageView;
 
 use crate::domain::{Color, ColorsManifest};
 
+mod oklch;
+
 const CLUSTERS: usize = 8;
 const ITERATIONS: usize = 16;
 const MAX_PIXELS: u64 = 16_777_216;
@@ -51,10 +53,15 @@ pub(crate) fn generate_kmeans_v3(bytes: &[u8]) -> Result<ColorsManifest, Palette
 pub(crate) struct GeneratedPalette {
     colors: ColorsManifest,
     brightest: f64,
+    source_max: f64,
+    role_aware: bool,
 }
 
 impl GeneratedPalette {
     pub(crate) fn for_opacity(&self, opacity: u32) -> ColorsManifest {
+        if self.role_aware {
+            return oklch::resolve(self, opacity, 0);
+        }
         let background = self.colors.background();
         let base = relative_luminance(background.as_rgb());
         let brightest = base + f64::from(opacity) / 1_000_000.0 * (self.brightest - base);
@@ -94,6 +101,51 @@ impl GeneratedPalette {
                 .expect("generated selection"),
         )
     }
+}
+
+/// Non-fatal outcome for the automatic light-on-dark whole-image contract.
+/// Manual overrides are applied later and are never certified by this result.
+pub(crate) struct PaletteResolution {
+    pub colors: ColorsManifest,
+    pub feasible: bool,
+}
+
+impl GeneratedPalette {
+    pub(crate) fn contrast_feasible(&self, opacity: u32, darken: u8) -> bool {
+        1.05 / (oklch::brightest(self, opacity, darken) + 0.05) >= 4.5
+    }
+
+    pub(crate) fn resolve(&self, opacity: u32, darken: u8, algorithm: &str) -> PaletteResolution {
+        let feasible = self.contrast_feasible(opacity, darken);
+        PaletteResolution {
+            // v1 retains its exact historical white fallback. v2 keeps original roles
+            // when the contract is infeasible; this is NOT a contrast correction.
+            colors: if algorithm == "oklch-v2" && !feasible {
+                self.colors.clone()
+            } else {
+                self.for_effects(opacity, darken)
+            },
+            feasible,
+        }
+    }
+
+    pub(crate) fn for_effects(&self, opacity: u32, darken: u8) -> ColorsManifest {
+        if self.role_aware {
+            oklch::resolve(self, opacity, darken)
+        } else {
+            self.for_opacity(opacity)
+        }
+    }
+    pub(crate) fn minimum_darkening(&self, opacity: u32) -> u8 {
+        oklch::minimum_darkening(self, opacity)
+    }
+}
+
+pub(crate) fn analyze_oklch(bytes: &[u8]) -> Result<GeneratedPalette, PaletteError> {
+    let mut generated = analyze(bytes)?;
+    generated.colors = oklch::roles(generated.colors.background());
+    generated.role_aware = true;
+    Ok(generated)
 }
 
 pub(crate) fn analyze(bytes: &[u8]) -> Result<GeneratedPalette, PaletteError> {
@@ -220,9 +272,11 @@ fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<GeneratedPalette
     let base_luminance = relative_luminance(background);
     // ponytail: whole-image bound includes cropped-out highlights; use viewport-aware
     // analysis only if this conservative correction proves too strong.
+    let mut source_max: f64 = 0.0;
     let brightest = image
         .pixels()
         .fold(base_luminance, |brightest, (_, _, pixel)| {
+            source_max = source_max.max(relative_luminance([pixel[0], pixel[1], pixel[2]]));
             let alpha = f64::from(pixel[3]) / 255.0;
             let composed = base_luminance * (1.0 - alpha)
                 + relative_luminance([pixel[0], pixel[1], pixel[2]]) * alpha;
@@ -241,7 +295,12 @@ fn generate(bytes: &[u8], tinted: bool, darken: bool) -> Result<GeneratedPalette
     .with_cursor(color(foreground)?)
     .with_selection_background(color(selection_background)?)
     .with_selection_foreground(color(selection_foreground)?);
-    Ok(GeneratedPalette { colors, brightest })
+    Ok(GeneratedPalette {
+        colors,
+        brightest,
+        source_max,
+        role_aware: false,
+    })
 }
 
 fn kmeans(samples: &[Rgb]) -> [Rgb; CLUSTERS] {

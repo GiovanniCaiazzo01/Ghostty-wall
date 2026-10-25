@@ -446,7 +446,8 @@ fn decoded_media_not_filename_controls_copy_and_invalid_images_retry_locally() {
     );
     assert_eq!(after, before);
     let plan = s.plan("decoded");
-    assert_eq!(plan["asset"]["media_type"], "image/jpeg");
+    assert_eq!(plan["asset"]["media_type"], "image/png");
+    assert_eq!(plan["image_effects"]["source_media_type"], "image/jpeg");
     assert_eq!(plan["selection"]["candidate"], "decoded.jpg");
 }
 
@@ -529,7 +530,7 @@ fn colors_are_image_coordinated_complete_and_repeatably_resolvable() {
             plan["environment"]["manifest"]["wallpaper"]["opacity_millionths"],
             50_000
         );
-        assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
+        assert_eq!(plan["color_resolution"]["algorithm"], "oklch-v2");
     }
     assert_eq!(colorful["environment"], s.plan("colorful")["environment"]);
     assert_eq!(snapshot(&s.root()), before);

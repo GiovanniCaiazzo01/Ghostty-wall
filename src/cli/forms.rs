@@ -27,7 +27,7 @@ pub(super) fn fields<T>(
     let mut field = 0;
     let mut error = String::new();
     loop {
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::resize_notice(frame) { return; }
             let areas = Layout::vertical([
                 Constraint::Length(2), Constraint::Min(1), Constraint::Length(4),
@@ -131,7 +131,7 @@ pub(super) fn image(
             }
         }
         selected = selected.min(entries.len().saturating_sub(1));
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::resize_notice(frame) { return; }
             let areas = Layout::vertical([Constraint::Length(3), Constraint::Min(1), Constraint::Length(3), Constraint::Length(4)]).split(frame.area());
             frame.render_widget(Block::default().style(Style::default().fg(Color::White).bg(Color::Black)), frame.area());
@@ -245,7 +245,7 @@ pub(super) fn confirm(
     let mut screen = editor::Screen::open(output)?;
     let mut scroll = 0_u16;
     loop {
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::resize_notice(frame) {
                 return;
             }

@@ -21,10 +21,8 @@ pub(super) fn run(
         ..tui::View::default()
     };
     let mut screen = editor::Screen::open(output)?;
-    screen
-        .terminal
-        .draw(|frame| tui::draw(frame, browser, &view))?;
-    refresh_active(application, &mut view);
+    screen.draw(|frame| tui::draw(frame, browser, &view))?;
+    let mut active = refresh_active(application, &mut view);
     let mut previews = preview::Previews::new(seed)?;
     let size = screen.terminal.size()?;
     previews.area = tui::preview_area(
@@ -48,6 +46,26 @@ pub(super) fn run(
             previews.resize(browser, &mut view, area);
             redraw = true;
         }
+        if let Ok(result) = active.try_recv() {
+            match result {
+                Ok(profile) => {
+                    view.active = profile;
+                    if view.status == "Active marker pending History validation." {
+                        view.status.clear();
+                    }
+                }
+                Err(error) => {
+                    if view.status.is_empty()
+                        || view.status == "Active marker pending History validation."
+                    {
+                        view.status = error;
+                    } else {
+                        view.status.push_str(&format!("\n{error}"));
+                    }
+                }
+            }
+            redraw = true;
+        }
         let completed = previews.poll(&mut view);
         redraw |= completed;
         if image_shown && (completed || view.sample.is_none() || area.is_none()) {
@@ -55,9 +73,7 @@ pub(super) fn run(
             image_shown = false;
         }
         if redraw {
-            screen
-                .terminal
-                .draw(|frame| tui::draw(frame, browser, &view))?;
+            screen.draw(|frame| tui::draw(frame, browser, &view))?;
             redraw = false;
         }
         if graphics
@@ -113,12 +129,22 @@ pub(super) fn run(
                 let result = previews.apply(application, browser, &mut view);
                 view.status = match result {
                     Ok(outcome) => {
-                        activation_report(outcome.activation_id(), outcome.reload_outcome(), None)
+                        let mut report = activation_report(
+                            outcome.activation_id(),
+                            outcome.reload_outcome(),
+                            None,
+                        );
+                        if outcome.contrast_infeasible() {
+                            report.push_str(
+                                "Contrast infeasible; non-conforming fallback. v details.\n",
+                            );
+                        }
+                        report
                     }
                     Err(e) => e.to_string(),
                 };
-                // Use commits captured content; updating the active marker needs no resolution.
-                refresh_active(application, &mut view);
+                // The marker remains advisory; Use still validates durable state.
+                active = refresh_active(application, &mut view);
             }
             Input::Command('v') => {
                 details(
@@ -162,7 +188,7 @@ pub(super) fn run(
                     Err(e) => e.to_string(),
                 };
                 reload_list(application, browser, seed, target.as_ref())?;
-                refresh_active(application, &mut view);
+                active = refresh_active(application, &mut view);
                 refresh(application, browser, &mut view, &mut previews);
                 screen.redraw()?;
             }
@@ -170,6 +196,12 @@ pub(super) fn run(
                 command @ ('l' | 'h' | 's' | 'P' | 'D' | 'p' | 'u' | 'U' | 'X' | 'I' | 'R' | 'W'
                 | 'M' | 'y' | 'Y'),
             ) => {
+                // Initialization deliberately uses a nonblocking exclusive lock.
+                // Finish our own advisory read first, so it cannot manufacture Busy.
+                // Read-only navigation/Edit never wait for this audit.
+                if matches!(command, 'I' | 'R' | 'W' | 'M') {
+                    let _ = active.recv();
+                }
                 let result = maintenance::report(
                     command,
                     screen.terminal.backend_mut(),
@@ -191,7 +223,7 @@ pub(super) fn run(
                             "\nRefresh failed: {error}. Inspect Settings/Doctor before retrying."
                         ));
                     }
-                    refresh_active(application, &mut view);
+                    active = refresh_active(application, &mut view);
                     refresh(application, browser, &mut view, &mut previews);
                 }
                 screen.redraw()?;
@@ -266,7 +298,7 @@ pub(super) fn preview_application(
     Ok(application)
 }
 
-fn clear_image(output: &mut impl Write) -> io::Result<()> {
+pub(super) fn clear_image(output: &mut impl Write) -> io::Result<()> {
     output.write_all(b"\x1b_Ga=d,d=I,i=42,q=2;\x1b\\")?;
     output.flush()
 }
@@ -307,29 +339,43 @@ fn refresh(
     previews.request(browser, view);
 }
 
-fn refresh_active(application: &Application, view: &mut tui::View) {
+fn refresh_active(
+    application: &Application,
+    view: &mut tui::View,
+) -> std::sync::mpsc::Receiver<Result<Option<IntentId>, String>> {
     view.active = None;
-    match crate::history::inspect_history(&application.paths.managed_root()) {
-        Ok(history) => view.active = history.latest().and_then(|a| a.profile_id()).cloned(),
-        Err(e) => {
-            view.status = format!("Active marker unavailable: {e}; inspect History with doctor.")
-        }
+    if view.status.is_empty() {
+        view.status = "Active marker pending History validation.".into();
     }
+    let root = application.paths.managed_root();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // Never infer an active Profile from unvalidated records. Audit stays intact,
+    // but a slow audit/lock must not gate read-only navigation or image preparation.
+    let result = std::thread::Builder::new()
+        .name("active-marker".into())
+        .spawn(move || {
+            let result = crate::history::inspect_history(&root)
+                .map(|history| history.latest().and_then(|a| a.profile_id()).cloned())
+                .map_err(|e| {
+                    format!("Active marker unavailable: {e}; inspect History with doctor.")
+                });
+            let _ = sender.send(result);
+        });
+    if let Err(error) = result {
+        view.status = format!("Active marker unavailable: {error}");
+    }
+    receiver
 }
 
 pub(super) fn details(output: &mut impl Write, report: &str) -> Result<(), CliError> {
     let mut screen = editor::Screen::open(output)?;
     let mut scroll = 0_u16;
     loop {
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             let areas =
                 Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(frame.area());
             frame.render_widget(
-                ratatui::widgets::Block::default().style(
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::White)
-                        .bg(ratatui::style::Color::Black),
-                ),
+                ratatui::widgets::Block::default().style(tui::CHROME),
                 frame.area(),
             );
             frame.render_widget(

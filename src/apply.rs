@@ -73,9 +73,16 @@ pub enum ApplyError {
 pub struct ApplyOutcome {
     activation_id: ActivationId,
     reload_outcome: ReloadOutcome,
+    contrast_infeasible: bool,
 }
 
 impl ApplyOutcome {
+    /// Fresh resolution reported a non-conforming automatic palette fallback.
+    /// False is not certification (for example, captured History is not reanalyzed).
+    pub const fn contrast_infeasible(self) -> bool {
+        self.contrast_infeasible
+    }
+
     /// Newly committed durable Activation identity.
     pub const fn activation_id(self) -> ActivationId {
         self.activation_id
@@ -227,6 +234,10 @@ fn apply_resolved_profile<R: ReloadAdapter>(
     Ok(ApplyOutcome {
         activation_id: id,
         reload_outcome: reload.reload(),
+        contrast_infeasible: plan
+            .pointer("/palette_contrast/status")
+            .and_then(Value::as_str)
+            == Some("infeasible"),
     })
 }
 
@@ -257,6 +268,10 @@ pub(crate) fn apply_reviewed_profile<R: ReloadAdapter>(
     Ok(ApplyOutcome {
         activation_id: id,
         reload_outcome: reload.reload(),
+        contrast_infeasible: plan
+            .pointer("/palette_contrast/status")
+            .and_then(Value::as_str)
+            == Some("infeasible"),
     })
 }
 
@@ -407,6 +422,7 @@ pub fn previous<R: ReloadAdapter>(
     Ok(ApplyOutcome {
         activation_id: id,
         reload_outcome: reload.reload(),
+        contrast_infeasible: false, // Replay preserves captured bytes, not a fresh contrast assessment.
     })
 }
 

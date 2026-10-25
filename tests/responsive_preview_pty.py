@@ -34,6 +34,50 @@ class ResponsivePreviewPty(ManagementPty):
         self.addCleanup(writer.close)
         return session, writer, document
 
+    def test_history_lock_does_not_gate_image_ready_navigation_or_edit(self):
+        with (self.root / "state.lock").open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            before = self.snapshot()
+            session = self.session()
+            session.wait_screen(b"Cursor", timeout=3)  # completed sample, not loading
+            session.wait_screen(b"Active marker pending History validation", timeout=3)
+            self.assertNotIn(b"[active]", session.screen())
+            session.send("e")
+            session.wait_screen(b"Edit Profile boy", timeout=3)
+            session.send("q")
+            session.wait_screen(b"draft discarded", timeout=3)
+            self.finish(session)
+            self.assertEqual(self.snapshot(), before)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def test_corrupt_history_allows_read_only_edit_but_still_blocks_use(self):
+        record = next((self.root / "history/activations").glob("*.json"))
+        record.write_bytes(b"corrupt record")
+        before = self.snapshot()
+        session = self.session()
+        session.wait_screen(b"Cursor")
+        session.wait_screen(b"Active marker unavailable")
+        self.assertNotIn(b"[active]", session.screen())
+        session.send("e")
+        session.wait_screen(b"Edit Profile boy")
+        session.send("q")
+        session.wait_screen(b"draft discarded")
+        session.wait_screen(b"Cursor")
+        session.send("a")
+        session.wait_screen(b"corrupt committed state")
+        self.finish(session)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_cached_noncurrent_image_change_is_rechecked_on_revisit(self):
+        session = self.session()
+        session.wait_screen(b"Cursor")
+        session.send("j")
+        session.wait_screen(b"Preview: welcome")
+        (self.root / "profiles/boy.png").write_bytes(b"corrupt image")
+        session.send("k")
+        session.wait_screen(b"owned image digest does not match", timeout=3)
+        self.finish(session)
+
     def test_image_and_source_errors_stay_in_panel_and_leave_navigation_usable(self):
         empty = self.home / "empty-source"
         empty.mkdir()

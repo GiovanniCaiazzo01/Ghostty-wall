@@ -485,6 +485,13 @@ impl TerminalBrowser {
 pub fn format_plan_preview(plan: &Value) -> String {
     let mut output = String::new();
     let manifest = &plan["environment"]["manifest"];
+    if plan
+        .pointer("/palette_contrast/status")
+        .and_then(Value::as_str)
+        == Some("infeasible")
+    {
+        output.push_str("Automatic contrast infeasible: non-conforming fallback, NOT a valid 4.5:1 palette. Whole-source light-on-dark contract; manual overrides unchecked. Adjust opacity/darkening explicitly.\n");
+    }
     writeln!(
         output,
         "Profile: {}",

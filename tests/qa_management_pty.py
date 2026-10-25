@@ -246,6 +246,7 @@ class ManagementPublicPath(ManagementFixture):
         before = self.snapshot()
         manifest = self.plan()["environment"]["manifest"]
         session = self.session()
+        wait_viewport(session, "welcome [active]", "Cursor", "NOT live Ghostty reload")
         cells = styled_cells(session)
         text = viewport(session)
         for label in ["welcome [active]", "n Create", "e Edit", "x Delete", "a Use", "NOT live Ghostty reload"]:
@@ -518,7 +519,7 @@ class ManagementPublicPath(ManagementFixture):
         session.send("s")
         session.wait(b"Saved Profile rollback.")
         session.wait(b"n Create")
-        self.assertEqual(self.plan("rollback")["asset"]["sha256"],
+        self.assertEqual(self.plan("rollback")["image_effects"]["source_sha256"],
                          hashlib.sha256(self.original.read_bytes()).hexdigest())
         self.assertEqual(len(self.history()), 1)
         self.finish(session)

@@ -612,7 +612,7 @@ fn validate_color(
         Some(ColorResolution::Generated { algorithm }) => {
             matches!(
                 algorithm.as_str(),
-                "kmeans-v1" | "kmeans-v2" | "kmeans-v3" | "kmeans-v4"
+                "kmeans-v1" | "kmeans-v2" | "kmeans-v3" | "kmeans-v4" | "oklch-v1" | "oklch-v2"
             ) && has_asset
                 && matches!(environment.wallpaper(), Some(WallpaperManifest::Image(_)))
         }

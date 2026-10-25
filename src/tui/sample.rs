@@ -19,6 +19,7 @@ use std::{
 #[derive(Clone)]
 pub(crate) struct Sample {
     pub manifest: EnvironmentManifest,
+    pub contrast_infeasible: bool,
     pub thumbnail: Option<image::RgbImage>,
     source: Option<Arc<image::RgbaImage>>,
     graphics: Option<Arc<str>>,
@@ -29,6 +30,7 @@ impl Sample {
     pub fn new(manifest: EnvironmentManifest, image: Option<&[u8]>) -> Self {
         Self {
             manifest,
+            contrast_infeasible: false,
             thumbnail: image
                 .and_then(|bytes| image::load_from_memory(bytes).ok())
                 .map(|image| image.thumbnail(40, 16).to_rgb8()),
@@ -47,10 +49,20 @@ impl Sample {
             .map(|i| Arc::new(i.to_rgba8()));
         Ok(Self {
             manifest,
+            contrast_infeasible: false,
             thumbnail: None,
             source,
             graphics: None,
         })
+    }
+
+    pub fn retained_bytes(&self) -> usize {
+        self.source.as_ref().map_or(0, |image| image.as_raw().len())
+            + self
+                .thumbnail
+                .as_ref()
+                .map_or(0, |image| image.as_raw().len())
+            + self.graphics.as_ref().map_or(0, |encoded| encoded.len())
     }
 
     pub fn prepare_graphics(&mut self, area: Rect) -> Result<(), image::ImageError> {
@@ -89,8 +101,11 @@ impl Sample {
 
     pub fn guidance(&self) -> String {
         let mut text = String::from(
-            "Static internal preview; not effective Ghostty configuration. Wallpaper uses linear-light sRGB compositing with the unchanged managed opacity and RGB values, matching Ghostty linear/linear-corrected blending (Linux default). Native blending, Display P3, user overrides, terminal font, blur and desktop transparency are not inferred or simulated. Image geometry uses a synthetic 8x16-pixel cell.\n",
+            "Static internal preview; not effective Ghostty configuration. Wallpaper uses linear-light sRGB compositing with the unchanged managed opacity and RGB values, matching Ghostty linear/linear-corrected blending (Linux default). Native blending, Display P3, user overrides, terminal font, native compositor blur and desktop transparency are not inferred or simulated. Image geometry uses a synthetic 8x16-pixel cell.\n",
         );
+        if self.contrast_infeasible {
+            text.push_str("Automatic contrast infeasible: non-conforming fallback, NOT a valid 4.5:1 palette. Whole-source light-on-dark bound; not a thumbnail estimate. Reduce opacity or adjust darkening explicitly. Manual overrides remain unchanged and unchecked.\n");
+        }
         if let Some(ratio) =
             sampled_contrast(&self.manifest, &self.thumbnail, self.source.is_some())
         {
@@ -168,6 +183,7 @@ impl Sample {
             &self.manifest,
             &self.thumbnail,
             self.source.is_some(),
+            self.contrast_infeasible,
         );
     }
 }
@@ -191,7 +207,7 @@ pub(crate) fn draw_sample(
     manifest: &EnvironmentManifest,
     thumbnail: &Option<image::RgbImage>,
 ) {
-    draw_surface(frame, area, manifest, thumbnail, false);
+    draw_surface(frame, area, manifest, thumbnail, false, false);
 }
 
 /// Sampled regions only: checking a thumbnail cannot certify every source pixel.
@@ -247,6 +263,7 @@ fn draw_surface(
     manifest: &EnvironmentManifest,
     thumbnail: &Option<image::RgbImage>,
     composited: bool,
+    contrast_infeasible: bool,
 ) {
     let inherited = match manifest.wallpaper() {
         Some(WallpaperManifest::Image(i)) => {
@@ -258,7 +275,9 @@ fn draw_surface(
         _ => false,
     };
     let low_contrast = sampled_contrast(manifest, thumbnail, composited).is_some_and(|v| v < 4.5);
-    let note = if low_contrast {
+    let note = if contrast_infeasible {
+        "Contrast infeasible; fallback · v details"
+    } else if low_contrast {
         "Low contrast; reduce image opacity"
     } else if thumbnail.is_none() {
         match manifest.wallpaper() {
@@ -420,6 +439,26 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(text.contains("Low contrast; reduce image opacity"));
+    }
+
+    #[test]
+    fn full_source_infeasibility_is_visible_even_without_thumbnail_evidence() {
+        let mut sample = Sample::new(EnvironmentManifest::new(None, None, None), None);
+        assert!(sampled_contrast(&sample.manifest, &sample.thumbnail, false).is_none());
+        sample.contrast_infeasible = true;
+        assert!(sample.guidance().contains("NOT a valid 4.5:1 palette"));
+        let mut terminal = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        terminal
+            .draw(|frame| sample.draw(frame, frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Contrast infeasible; fallback"));
     }
 
     #[test]

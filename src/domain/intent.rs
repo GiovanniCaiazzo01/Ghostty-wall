@@ -108,6 +108,8 @@ pub struct ProfileIntent {
     pub wallpaper: Option<WallpaperIntent>,
     /// Optional colors intent.
     pub colors: Option<ColorsIntent>,
+    /// Explicit generated palette algorithm; absent preserves kmeans-v4.
+    pub palette_algorithm: Option<&'static str>,
     /// Optional terminal intent.
     pub terminal: Option<TerminalIntent>,
 }
@@ -131,9 +133,20 @@ pub enum WallpaperIntent {
         opacity: Option<OpacityMillionths>,
         /// Optional repeat flag.
         repeat: Option<bool>,
+        /// Versioned image-space effects; source bytes remain untouched.
+        effects: Option<WallpaperEffects>,
         /// Version 2 owned image digest and optional generation recipe.
         owned_image: Option<OwnedImage>,
     },
+}
+
+/// Image-space effects v1. Blur sigma is measured at a 512-pixel short edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WallpaperEffects {
+    /// Gaussian sigma, 0..=32 reference pixels.
+    pub blur: u8,
+    /// Linear-light black overlay, 0..=100 percent; separate from image opacity.
+    pub darken: u8,
 }
 
 /// Version 2 managed image claim; image bytes remain the authoritative candidate.
@@ -148,6 +161,8 @@ pub struct OwnedImage {
 /// Versioned deterministic generator recipe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationRecipe {
+    /// Validated versioned algorithm identifier (gradient-v1 or composition-v1).
+    pub algorithm: &'static str,
     /// 32-byte seed.
     pub seed: super::Sha256Digest,
     /// Image width.

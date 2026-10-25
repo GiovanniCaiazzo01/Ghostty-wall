@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -15,6 +15,19 @@ use crate::{
     terminal_browser::{BrowserAction, BrowserFocus, BrowserMode, TerminalBrowser},
 };
 use sample::Sample;
+
+// Explicit RGB keeps application chrome independent of remapped terminal ANSI slots.
+// Window opacity, shaders and compositor effects remain terminal-owned.
+pub(crate) const CHROME: Style = Style::new()
+    .fg(Color::Rgb(229, 231, 235))
+    .bg(Color::Rgb(15, 23, 42));
+pub(crate) const SECONDARY: Style = Style::new().fg(Color::Rgb(166, 180, 204));
+pub(crate) const EMPHASIS: Style = Style::new()
+    .fg(Color::Rgb(170, 196, 255))
+    .add_modifier(Modifier::BOLD);
+pub(crate) const FOCUS: Style = Style::new()
+    .fg(Color::Rgb(229, 231, 235))
+    .bg(Color::Rgb(51, 75, 133));
 
 pub(crate) const ACTIONS: &[(char, &str)] = &[
     ('n', "Create Profile"),
@@ -138,7 +151,7 @@ pub(crate) fn resize_notice(frame: &mut Frame) -> bool {
     }
     frame.render_widget(
         Paragraph::new("Resize to 40x12.\nEsc/Ctrl-C cancels.")
-            .style(Style::default().fg(Color::White).bg(Color::Black))
+            .style(CHROME)
             .wrap(Wrap { trim: false }),
         frame.area(),
     );
@@ -182,7 +195,7 @@ pub(crate) fn preview_area(
     Some(
         Layout::horizontal([
             if wide {
-                Constraint::Percentage(40)
+                Constraint::Length(26)
             } else {
                 Constraint::Length(20)
             },
@@ -196,16 +209,13 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
     if management_needs_resize(frame.area().width, frame.area().height) {
         frame.render_widget(
             Paragraph::new("Resize management to 60x18.\nEsc/Ctrl-C cancels.\nCreate/Edit forms still support 40x12.")
-                .style(Style::default().fg(Color::White).bg(Color::Black))
+                .style(CHROME)
                 .wrap(Wrap { trim: false }),
             frame.area(),
         );
         return;
     }
-    frame.render_widget(
-        Block::default().style(Style::default().fg(Color::White).bg(Color::Black)),
-        frame.area(),
-    );
+    frame.render_widget(Block::default().style(CHROME), frame.area());
     let wide = frame.area().width >= 90 && frame.area().height >= 18;
     let compact_sample = !wide && view.show_sample && view.menu.is_none();
     let areas = Layout::vertical([
@@ -240,7 +250,7 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
         }))
         .block(Block::default().title("Actions").borders(Borders::ALL))
         .highlight_symbol("> ")
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+        .highlight_style(FOCUS);
         frame.render_stateful_widget(
             list,
             areas[1],
@@ -249,7 +259,7 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
     } else {
         let panes = Layout::horizontal([
             if wide {
-                Constraint::Percentage(40)
+                Constraint::Length(26)
             } else {
                 Constraint::Length(20)
             },
@@ -281,9 +291,9 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
                     )
                 }
             }))
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .block(Block::default().title(title).borders(Borders::RIGHT))
             .highlight_symbol("> ")
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            .highlight_style(FOCUS);
             frame.render_stateful_widget(
                 list,
                 area,
@@ -314,7 +324,7 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
     } else if !wide {
         "n Create · e Edit · x Delete · a Use\n↑↓ select · p preview · q quit"
     } else {
-        "n Create · e Edit · x Delete · a Use\n↑↓ auto · p preview · Tab Sources\n? Actions · v details · q quit"
+        "n Create · e Edit · x Delete · a Use · ? Actions · q quit\n↑↓ select · p preview · Tab Sources · v details"
     };
     let status = if view.status.is_empty() && !view.preview_error.is_empty() {
         "Preview unavailable; v details"
@@ -333,6 +343,73 @@ pub(crate) fn draw(frame: &mut Frame, browser: &TerminalBrowser, view: &View) {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn preview_geometry_matches_rendered_surface_and_reserves_footer() {
+        let browser = TerminalBrowser::new(vec![], vec!["night".parse().unwrap()]);
+        for (width, height) in [(60, 18), (80, 20), (90, 18), (100, 30), (160, 48)] {
+            for show_sample in [false, true] {
+                let view = View {
+                    show_sample,
+                    ..View::default()
+                };
+                let area = ratatui::layout::Rect::new(0, 0, width, height);
+                let preview = preview_area(area, &view).unwrap();
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| draw(frame, &browser, &view)).unwrap();
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(0, 0)].fg, Color::Rgb(229, 231, 235));
+                assert_eq!(buffer[(0, 0)].bg, Color::Rgb(15, 23, 42));
+                assert_eq!(buffer[(preview.x, preview.y)].symbol(), "P");
+                assert_eq!(
+                    preview.bottom(),
+                    height - if width >= 90 { 5 } else { 3 },
+                    "footer must stay outside graphics"
+                );
+                if width >= 90 {
+                    assert_eq!(preview.x, 26);
+                    assert!(
+                        preview.width > width / 2,
+                        "preview must dominate wide layout"
+                    );
+                }
+                let menu = View {
+                    menu: Some(0),
+                    ..View::default()
+                };
+                assert!(
+                    preview_area(area, &menu).is_none(),
+                    "graphics must not cover menus"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn result_footer_has_room_for_save_outcome_and_detail() {
+        let browser = TerminalBrowser::new(vec![], vec!["night".parse().unwrap()]);
+        let view = View {
+            status: "Profile saved. Saved Profile generated.\nNot applied; terminal and History unchanged.".into(),
+            ..View::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| draw(frame, &browser, &view)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Saved Profile generated."));
+        assert!(text.contains("Not applied; terminal and History unchanged."));
+        assert_eq!(
+            preview_area(ratatui::layout::Rect::new(0, 0, 100, 30), &view)
+                .unwrap()
+                .bottom(),
+            25
+        );
+    }
 
     #[test]
     fn management_minimum_preserves_photo_space_without_changing_form_minimum() {
@@ -412,6 +489,9 @@ mod tests {
             view.menu = Some(ACTIONS.len() - 1);
             terminal.draw(|frame| draw(frame, &browser, &view)).unwrap();
             assert!(text(&terminal).contains("Uninstall"));
+            assert!(terminal.backend().buffer().content().iter().any(|cell| {
+                cell.fg == Color::Rgb(229, 231, 235) && cell.bg == Color::Rgb(51, 75, 133)
+            }));
         }
         let mut tiny = Terminal::new(TestBackend::new(30, 8)).unwrap();
         tiny.draw(|frame| draw(frame, &browser, &View::default()))
