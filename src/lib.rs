@@ -40,3 +40,4 @@ pub mod theme;
 mod tui;
 /// Explicit release-owned executable updates.
 pub mod update;
+mod wallpaper_effects;

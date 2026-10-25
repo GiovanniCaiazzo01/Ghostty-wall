@@ -20,10 +20,10 @@ Use the [release plan (#7)](https://github.com/GiovanniCaiazzo01/Ghostty-wall/is
 1. Read the selected spec and check the release plan for current scope, dependencies and existing work.
 2. Open or link a [GitHub issue](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues) for the selected spec. Issues remain the public execution tracker; these documents define scope, not a second status board.
 3. Create its implementation branch from an up-to-date `main`, or switch to an existing branch and merge the latest `main`. Do this for each subsequent spec so completed dependencies are present. Do not reset or overwrite work already on a branch.
-4. Recheck the baseline and run upstream GitNexus impact analysis before source edits. The risk notes below are planning evidence, not authorization to skip a fresh check.
+4. Recheck the baseline, callers, and affected paths before source edits. The risk notes below are historical planning evidence; verify them against the current source.
 5. Add the smallest regression that fails for the stated problem. Reuse the existing Rust tests and disposable-HOME PTY tests; do not add a test framework.
 6. Implement only that spec. Update relevant CLI help, user documentation, examples, and website content for shipped behavior.
-7. Run its focused checks, then the applicable CI gates. Run complete GitNexus change analysis before committing. A partial/truncated graph result is not a clean check.
+7. Run its focused checks, then the applicable CI gates. Review the complete diff before committing.
 8. Submit one implementation PR for that spec and link its issue and acceptance evidence. Start the next dependent spec after the previous work is merged.
 
 For example, to start Spec 02 with a clean, up-to-date checkout when its branch does not yet exist:
@@ -44,7 +44,7 @@ git switch -c feat/spec-02-source-management main
 
 ## Planning risk
 
-This table records the initial planning analysis against the v1.2.0 baseline. It is historical context; rerun impact analysis before changing source.
+This table records the initial planning analysis against the v1.2.0 baseline. It is historical context; recheck callers and affected paths before changing source.
 
 | Seam | Graph risk | Callers / affected paths | Planning constraint |
 | --- | --- | --- | --- |

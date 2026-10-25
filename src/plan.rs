@@ -495,6 +495,8 @@ fn plan_profile_json_inner(
         }
     }
     let mut selected_asset_bytes = None;
+    let mut image_effects = None;
+    let mut palette_source = None;
     let (wallpaper, source_json, selection_json, asset_json) = match &profile.wallpaper {
         Some(WallpaperIntent::None) => (
             Some(crate::domain::WallpaperManifest::None),
@@ -509,6 +511,7 @@ fn plan_profile_json_inner(
             position,
             opacity,
             repeat,
+            effects,
             owned_image,
         }) => {
             let source_intent = config
@@ -561,6 +564,20 @@ fn plan_profile_json_inner(
                     ));
                 }
             }
+            let mut resolved = resolved;
+            if let Some(effects) = effects {
+                // Palette analysis uses the untouched Source: conservative for blur and
+                // stable across preview-sized and full-size effect rendering.
+                palette_source = Some(resolved.bytes.clone());
+                image_effects = Some(json!({
+                    "algorithm": "image-effects-v1", "blur": effects.blur, "darken": effects.darken,
+                    "source_sha256": sha256(&resolved.bytes).to_string(),
+                    "source_byte_length": resolved.bytes.len(),
+                    "source_media_type": detect_media_type(&resolved.bytes)?.as_str(),
+                }));
+                resolved.bytes = crate::wallpaper_effects::render(&resolved.bytes, *effects, false)
+                    .map_err(|_| PlanError::UnsupportedImage)?;
+            }
             let media_type = detect_media_type(&resolved.bytes)?;
             let asset_sha256 = sha256(&resolved.bytes);
             let mut image = ImageWallpaper::new(asset_sha256, media_type);
@@ -592,6 +609,7 @@ fn plan_profile_json_inner(
         None => (None, None, None, None),
     };
 
+    let mut palette_contrast = None;
     let (colors, theme_name) = match &profile.colors {
         Some(ColorsIntent::Explicit {
             background,
@@ -629,12 +647,45 @@ fn plan_profile_json_inner(
                 }
                 _ => 0,
             };
-            let generated = crate::palette::generate_kmeans_v4(
-                selected_asset_bytes
+            let generated = if let Some(algorithm @ ("oklch-v1" | "oklch-v2")) = profile.palette_algorithm {
+                let bytes = palette_source
                     .as_deref()
-                    .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
-                opacity,
-            )
+                    .or(selected_asset_bytes.as_deref())
+                    .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?;
+                let darken = match &profile.wallpaper {
+                    Some(WallpaperIntent::Source {
+                        effects: Some(e), ..
+                    }) => e.darken,
+                    _ => 0,
+                };
+                crate::palette::analyze_oklch(bytes).map(|p| {
+                    let result = p.resolve(opacity, darken, algorithm);
+                    palette_contrast = Some(json!({
+                        "status": if result.feasible { "feasible" } else { "infeasible" },
+                        "scope": "automatic-light-on-dark-whole-image",
+                        "target": 4.5,
+                        "manual_overrides_checked": false,
+                    }));
+                    if !result.feasible {
+                        diagnostics.push(json!({
+                            "code": "colors.contrast-infeasible",
+                            "severity": "warning",
+                            "scope": "automatic-light-on-dark-whole-image",
+                            "target": 4.5,
+                            "fallback": if algorithm == "oklch-v2" { "original-roles" } else { "legacy-white" },
+                        }));
+                    }
+                    result.colors
+                })
+            } else {
+                crate::palette::generate_kmeans_v4(
+                    palette_source
+                        .as_deref()
+                        .or(selected_asset_bytes.as_deref())
+                        .ok_or(PlanError::Unsupported("generated colors require wallpaper"))?,
+                    opacity,
+                )
+            }
             .map_err(|_| PlanError::UnsupportedImage)?;
             let resolved = match &profile.colors {
                 Some(ColorsIntent::GeneratedWithOverrides(overrides)) => {
@@ -702,10 +753,13 @@ fn plan_profile_json_inner(
     insert_optional(&mut plan, "source", source_json);
     insert_optional(&mut plan, "selection", selection_json);
     insert_optional(&mut plan, "asset", asset_json);
+    insert_optional(&mut plan, "image_effects", image_effects);
     let color_resolution = match &profile.colors {
         Some(ColorsIntent::Generated | ColorsIntent::GeneratedWithOverrides(_)) => {
             // RFC 0005: preserve historical algorithm provenance across palette changes.
-            Some(json!({ "kind": "generated", "algorithm": "kmeans-v4" }))
+            Some(
+                json!({ "kind": "generated", "algorithm": profile.palette_algorithm.unwrap_or("kmeans-v4") }),
+            )
         }
         Some(ColorsIntent::Theme { .. }) => {
             let theme = theme_name.ok_or(PlanError::Unsupported("missing theme provenance"))?;
@@ -719,6 +773,7 @@ fn plan_profile_json_inner(
         None => None,
     };
     insert_optional(&mut plan, "color_resolution", color_resolution);
+    insert_optional(&mut plan, "palette_contrast", palette_contrast);
     Ok(plan)
 }
 
@@ -1043,6 +1098,10 @@ fn github_error(source_id: &IntentId, error: GithubApiError) -> PlanError {
 }
 
 pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>, PlanError> {
+    read_planned_local_bytes(plan, false)
+}
+
+fn read_planned_local_bytes(plan: &Value, original: bool) -> Result<Option<Vec<u8>>, PlanError> {
     let Some(source) = plan.get("source") else {
         return Ok(None);
     };
@@ -1065,6 +1124,10 @@ pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>,
         .map_err(|_| PlanError::Unsupported("invalid planned Candidate"))?;
     let root_file = open_source_root(&root)?;
     let bytes = read_candidate(&root, &root_file, &candidate)?;
+    let bytes = derive_planned_bytes(plan, bytes, original)?;
+    if original {
+        return Ok(Some(bytes));
+    }
     let asset = plan
         .get("asset")
         .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
@@ -1081,6 +1144,14 @@ pub(crate) fn planned_local_asset_bytes(plan: &Value) -> Result<Option<Vec<u8>>,
 pub(crate) fn planned_github_asset_bytes(
     plan: &Value,
     github: &dyn GithubApi,
+) -> Result<Option<Vec<u8>>, PlanError> {
+    read_planned_github_bytes(plan, github, false)
+}
+
+fn read_planned_github_bytes(
+    plan: &Value,
+    github: &dyn GithubApi,
+    original: bool,
 ) -> Result<Option<Vec<u8>>, PlanError> {
     let Some(source) = plan.get("source") else {
         return Ok(None);
@@ -1127,6 +1198,10 @@ pub(crate) fn planned_github_asset_bytes(
     if bytes.len() as u64 > MAX_ASSET_BYTES {
         return Err(github_error(&source_id, GithubApiError::Unavailable));
     }
+    let bytes = derive_planned_bytes(plan, bytes, original)?;
+    if original {
+        return Ok(Some(bytes));
+    }
     let asset = plan
         .get("asset")
         .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
@@ -1138,6 +1213,67 @@ pub(crate) fn planned_github_asset_bytes(
         return Err(PlanError::SourceDrift);
     }
     Ok(Some(bytes))
+}
+
+/// Editor needs the unchanged Source to make effects reversible, not a filtered Asset.
+pub(crate) fn planned_original_asset_bytes(
+    plan: &Value,
+    github: &dyn GithubApi,
+) -> Result<Option<Vec<u8>>, PlanError> {
+    if plan.pointer("/source/kind").and_then(Value::as_str) == Some("github") {
+        read_planned_github_bytes(plan, github, true)
+    } else {
+        read_planned_local_bytes(plan, true)
+    }
+}
+
+fn derive_planned_bytes(
+    plan: &Value,
+    bytes: Vec<u8>,
+    original: bool,
+) -> Result<Vec<u8>, PlanError> {
+    let Some(e) = plan.get("image_effects") else {
+        // Without effects the source is the asset; preserve all original validation.
+        if original {
+            let asset = plan
+                .get("asset")
+                .ok_or(PlanError::Unsupported("invalid planned Asset"))?;
+            if asset["sha256"].as_str() != Some(&sha256(&bytes).to_string())
+                || asset["byte_length"].as_u64() != Some(bytes.len() as u64)
+                || asset["media_type"].as_str() != Some(detect_media_type(&bytes)?.as_str())
+            {
+                return Err(PlanError::SourceDrift);
+            }
+        }
+        return Ok(bytes);
+    };
+    if e["algorithm"].as_str() != Some("image-effects-v1")
+        || e["source_sha256"].as_str() != Some(&sha256(&bytes).to_string())
+        || e["source_byte_length"].as_u64() != Some(bytes.len() as u64)
+        || e["source_media_type"].as_str() != Some(detect_media_type(&bytes)?.as_str())
+    {
+        return Err(PlanError::SourceDrift);
+    }
+    let blur = e["blur"]
+        .as_u64()
+        .filter(|v| *v <= 32)
+        .ok_or(PlanError::UnsupportedImage)?;
+    let darken = e["darken"]
+        .as_u64()
+        .filter(|v| *v <= 100)
+        .ok_or(PlanError::UnsupportedImage)?;
+    if original {
+        return Ok(bytes);
+    }
+    crate::wallpaper_effects::render(
+        &bytes,
+        crate::domain::WallpaperEffects {
+            blur: blur as u8,
+            darken: darken as u8,
+        },
+        false,
+    )
+    .map_err(|_| PlanError::UnsupportedImage)
 }
 
 fn resolve_local_root(

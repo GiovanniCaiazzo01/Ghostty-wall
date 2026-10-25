@@ -179,6 +179,78 @@ fn generated_palette_rejects_malformed_and_oversized_images() {
     );
 }
 
+#[test]
+fn versioned_fallback_reports_infeasibility_without_certifying_distinct_roles() {
+    for (name, pixels, feasible) in [
+        ("black", vec![[0; 3]], true),
+        ("white", vec![[255; 3]], false),
+        ("gray", (0..=255).map(|v| [v; 3]).collect(), false),
+        (
+            "saturated",
+            vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+            false,
+        ),
+        ("mixed", vec![[0; 3], [255; 3]], false),
+    ] {
+        let image = image::RgbImage::from_fn(pixels.len() as u32, 1, |x, _| {
+            image::Rgb(pixels[x as usize])
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let path = fixture(&format!("{name}.png"), bytes.get_ref());
+        let recipe = |algorithm: &str| {
+            format!("opacity = 0.65\n[colors]\nmode = \"generated\"\nalgorithm = \"{algorithm}\"\n")
+        };
+        let old = profile_plan(&path, &recipe("oklch-v1")).unwrap();
+        let new = profile_plan(&path, &recipe("oklch-v2")).unwrap();
+        assert_eq!(new, profile_plan(&path, &recipe("oklch-v2")).unwrap());
+        let colors = |p: &Value| p["environment"]["manifest"]["colors"].clone();
+        let distinct = |p: &Value| {
+            colors(p)["palette"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        for p in [&old, &new] {
+            assert_eq!(
+                p["palette_contrast"]["status"],
+                if feasible { "feasible" } else { "infeasible" }
+            );
+            assert_eq!(p["palette_contrast"]["manual_overrides_checked"], false);
+            assert_eq!(
+                p["diagnostics"].as_array().unwrap().len(),
+                usize::from(!feasible)
+            );
+        }
+        assert_eq!(distinct(&new), 16, "{name}");
+        if feasible {
+            assert_eq!(colors(&old), colors(&new));
+        } else {
+            assert_eq!(distinct(&old), 1, "historical v1 white fallback unchanged");
+            assert_eq!(colors(&old)["foreground"], "ffffff");
+            assert_eq!(new["diagnostics"][0]["fallback"], "original-roles");
+            assert!(
+                ghostty_wall::terminal_browser::format_plan_preview(&new)
+                    .contains("NOT a valid 4.5:1 palette")
+            );
+        }
+        let custom = profile_plan(
+            &path,
+            &format!(
+                "{}[colors.overrides]\nforeground = \"123456\"\n",
+                recipe("oklch-v2")
+            ),
+        )
+        .unwrap();
+        assert_eq!(colors(&custom)["foreground"], "123456");
+        assert_eq!(custom["palette_contrast"], new["palette_contrast"]);
+        assert_eq!(fs::read(&path).unwrap(), *bytes.get_ref());
+    }
+}
+
 fn generated_plan(path: &std::path::Path) -> Result<Value, ghostty_wall::plan::PlanError> {
     profile_plan(path, "opacity = 0.0\n[colors]\nmode = \"generated\"\n")
 }
@@ -193,8 +265,9 @@ fn profile_plan(
         source.display()
     ))
     .unwrap();
+    let schema = if colors.contains("oklch-") { 2 } else { 1 };
     let profile = parse_profile_toml(&format!(
-        "schema_version = 1\n[wallpaper]\nmode = \"source\"\nsource = \"local\"\nselection = \"path\"\npath = \"{}\"\n{colors}",
+        "schema_version = {schema}\n[wallpaper]\nmode = \"source\"\nsource = \"local\"\nselection = \"path\"\npath = \"{}\"\n{colors}",
         path.file_name().unwrap().to_str().unwrap()
     ))
     .unwrap();

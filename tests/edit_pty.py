@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import termios
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from tui_pty import Session, BINARY, ROOT, ALT_ENTER
@@ -23,7 +24,10 @@ class EditSession(Session):
         # Replay the cursor/erase subset emitted by Crossterm. Unlike stripping
         # ANSI, this preserves unchanged characters between Ratatui diff frames.
         cells, x, y = {}, 0, 0
-        for token in re.findall(r"\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]+", self.data.decode(errors="replace")):
+        # Kitty payloads are graphics, not terminal glyphs. Ignore save/restore too.
+        text = re.sub(rb"\x1b_G.*?\x1b\\", b"", self.data, flags=re.S)
+        text = re.sub(rb"\x1b[78]", b"", text).decode(errors="replace")
+        for token in re.findall(r"\x1b\[[0-?]*[ -/]*[@-~]|[^\x1b]+", text):
             if token.startswith("\x1b["):
                 args, command = token[2:-1], token[-1]
                 if command in "Hf":
@@ -99,6 +103,117 @@ class EditPty(unittest.TestCase):
         session.wait(ALT_ENTER, timeout=30)
         return session
 
+    def test_compact_details_before_first_preview_are_not_empty(self):
+        before = self.snapshot()
+        popen = subprocess.Popen
+
+        def compact(*args, **kwargs):
+            fcntl.ioctl(kwargs["stdin"], termios.TIOCSWINSZ, struct.pack("HHHH", 20, 60, 0, 0))
+            return popen(*args, **kwargs)
+
+        self.env["TERM_PROGRAM"] = "ghostty"
+        with patch("tui_pty.subprocess.Popen", side_effect=compact):
+            session = self.session("boy")
+        session.wait(b"Controls (p)")
+        session.send("v")
+        session.wait(b"Preview not prepared", timeout=3)
+        session.wait(b"not live Ghostty reload")
+        self.assertNotIn(b"\x1b_Ga=T", session.data)
+        session.send("\x1b")
+        session.wait(b"Controls (p)")
+        session.send("q")
+        session.wait(b"draft discarded")
+        session.finish()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_screen_clear_and_redraw_are_presented_together(self):
+        before = self.snapshot()
+        self.env["TERM_PROGRAM"] = "ghostty"
+        session = EditSession(BINARY, self.env, "tui")
+        self.addCleanup(session.close)
+        session.wait(b"n Create")
+        session.send("e")
+        session.wait(b"Edit Profile boy")
+        session.send("v")
+        session.wait(b"Enter/Esc/q back")
+        session.send("\x1b")
+        session.wait(b"Edit Profile boy")
+        session.send("u")
+        session.wait(b"Save and use Profile boy?")
+        session.send("\x1b")
+        session.wait(b"Back to editor; draft intact.")
+        session.send("q")
+        session.wait(b"draft discarded")
+        session.send("q")
+        session.finish()
+        synchronized, clears = False, 0
+        for token in re.findall(rb"\x1b\[\?2026[hl]|\x1b\[2J", session.data):
+            if token == b"\x1b[?2026h":
+                synchronized = True
+            elif token == b"\x1b[?2026l":
+                synchronized = False
+            else:
+                self.assertTrue(synchronized, "screen cleared outside synchronized redraw")
+                clears += 1
+        self.assertGreater(clears, 0)
+        for clear in re.finditer(rb"\x1b\[2J", session.data):
+            frame, end, _ = bytes(session.data[clear.end():]).partition(b"\x1b[?2026l")
+            self.assertTrue(end, "cleared frame never completed")
+            text = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", frame)
+            self.assertRegex(text, rb"[A-Za-z]{3}", "synchronization ended before frame text")
+        self.assertFalse(synchronized, "synchronized output left enabled on exit")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_editor_image_updates_idle_resize_popups_and_cancel(self):
+        from preview_ready_latency import pngs, wait
+        self.cli("new", "colorful", "--generate", "12" * 32)
+        before = self.snapshot()
+        self.env["TERM_PROGRAM"] = "ghostty"
+        session = self.session("colorful")
+        wait(session, lambda: len(pngs(session.data)) >= 1, time.perf_counter_ns())
+        original = pngs(session.data)[-1]
+        count = len(pngs(session.data))
+        session.send("\x1b[B" * 6 + "\r8\r")
+        wait(session, lambda: len(pngs(session.data)) > count, time.perf_counter_ns())
+        blurred = pngs(session.data)[-1]
+        self.assertNotEqual(original, blurred)
+        count = len(pngs(session.data))
+        session.send("\x1b[B\r60\r")
+        wait(session, lambda: len(pngs(session.data)) > count, time.perf_counter_ns())
+        self.assertNotEqual(blurred, pngs(session.data)[-1])
+        count = len(pngs(session.data))
+        time.sleep(0.2)
+        if select.select([session.master], [], [], 0)[0]:
+            session.data.extend(os.read(session.master, 65536))
+        self.assertEqual(len(pngs(session.data)), count, "idle editor retransmitted image")
+        session.send("u")
+        session.wait(b"Save and use Profile colorful?")
+        self.assertIn(b"\x1b_Ga=d,d=I,i=42", session.data)
+        session.send("\x1b")
+        wait(session, lambda: len(pngs(session.data)) > count, time.perf_counter_ns())
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 40, 0, 0))
+        session.send("\x00")
+        session.wait(b"p preview")
+        count = len(pngs(session.data))
+        session.send("p")
+        wait(session, lambda: len(pngs(session.data)) > count, time.perf_counter_ns())
+        session.wait(b"reduced; approximate")
+        session.send("pq")
+        session.wait(b"draft discarded")
+        session.finish()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_editor_fallback_is_explicit_without_graphics_protocol(self):
+        before = self.snapshot()
+        session = self.session("boy")
+        session.wait(b"Internal sample (cell fallback)")
+        self.assertIn(b"\x1b[38;2;229;231;235;48;2;15;23;42m", session.data,
+                      "chrome must emit truecolor, not remappable ANSI white/black")
+        self.assertNotIn(b"\x1b_G", session.data)
+        session.send("q")
+        session.finish()
+        self.assertEqual(self.snapshot(), before)
+
     def test_save_only_after_decline_publishes_draft_without_activation_or_reload(self):
         before = self.snapshot()
         hook = self.home / "config/ghostty/config.ghostty"
@@ -118,6 +233,29 @@ class EditPty(unittest.TestCase):
         before.pop(Path("profiles/boy.toml"))
         self.assertEqual(after, before)
         self.assertEqual(hook.read_bytes(), integration)
+
+    def test_image_effect_controls_cancel_and_save_without_mutating_original_or_history(self):
+        before = self.snapshot()
+        commands = "\x1b[B" * 6 + "\r8\r\x1b[B\r30\r"
+        session = self.session("boy")
+        session.wait(b"Edit Profile boy")
+        session.send(commands + "q")
+        session.finish()
+        self.assertEqual(self.snapshot(), before)
+        session = self.session("boy")
+        session.wait(b"Edit Profile boy")
+        session.send(commands + "s")
+        session.wait(b"Profile saved.")
+        session.finish()
+        after = self.snapshot()
+        self.assertIn(b'algorithm = "image-effects-v1"', after[Path("profiles/boy.toml")])
+        self.assertIn(b"blur = 8", after[Path("profiles/boy.toml")])
+        self.assertIn(b"darken = 30", after[Path("profiles/boy.toml")])
+        after.pop(Path("profiles/boy.toml"))
+        before.pop(Path("profiles/boy.toml"))
+        self.assertEqual(after, before)
+        plan = json.loads(self.cli("plan", "boy", "--json"))
+        self.assertEqual((plan["image_effects"]["blur"], plan["image_effects"]["darken"]), (8, 30))
 
     def test_small_picker_exposes_complete_selected_long_path_without_leaving_editor(self):
         downloads = self.home / "Downloads"

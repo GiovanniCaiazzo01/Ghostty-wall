@@ -45,9 +45,7 @@ pub(super) fn flow(output: &mut impl Write) -> Result<(Option<IntentId>, String)
     let mut sample = None;
     let mut screen = editor::Screen::open(output)?;
     loop {
-        screen
-            .terminal
-            .draw(|frame| draw(frame, &form, sample.as_ref()))?;
+        screen.draw(|frame| draw(frame, &form, sample.as_ref()))?;
         let key = editor::key()?;
         if editor::interrupt(key) {
             return Ok((None, "Creation cancelled; no Profile saved.".into()));

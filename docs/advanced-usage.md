@@ -21,7 +21,7 @@ ghostty-wall create night
 
 Choose **Generate** or **Image**. Full-screen Create uses the Edit actions below. Standalone line prompts offer **Use now** / **Not now** after Save; Enter defaults to **Not now**.
 
-The Downloads/Pictures picker copies your PNG/JPEG, keeping the original. **Another variant** changes only unsaved generated drafts; saved wallpapers stay fixed.
+The Downloads/Pictures picker copies your PNG/JPEG, keeping the original. **Another variant** changes only unsaved generated drafts; saved wallpapers stay fixed. Guided Generate and Edit use `composition-v1`: seed-driven palettes, staggered tiles, oblique ribbons or soft off-center fields, at 768×512. The complete 32-byte seed determines the output. Previously saved `gradient-v1` images and the advanced `new --generate SEED_HEX` command keep their original semantics; generation metadata never regenerates saved or historical image bytes. Older binaries reject the new recipe identifier; back up before downgrading.
 
 To import directly without applying:
 
@@ -66,15 +66,31 @@ New image profiles start at opacity **0.05**, unless you choose otherwise. Exist
 
 Wallpaper opacity fades the image toward the background, without changing terminal transparency. Automatic text colors are recalculated for the chosen opacity; customized colors stay unchanged. Light backgrounds can make the image lighter.
 
+### Reversible image blur and darkening
+
+In `edit PROFILE`, Wallpaper controls include **Image blur**, **Image darkening** and **Auto darkening**. Blur is Gaussian sigma 0–32 at a 512-pixel short edge (scaled to image dimensions), not `terminal.background_blur_intensity`. Darkening is a 0–100% linear-light black overlay applied to the image RGB, preserving alpha; it is not wallpaper opacity. Set both to zero to recover the original bytes. Originals and desktop wallpaper are never changed.
+
+```toml
+# Inside a schema_version = 2 Profile with a source wallpaper:
+[wallpaper.effects]
+algorithm = "image-effects-v1"
+blur = 8
+darken = 30
+```
+
+Source bytes and ownership claims stay unchanged. Plan derives a bounded PNG; captured Environments retain the resulting bytes and replay without the Source or effect renderer. Editing reuses a small effect thumbnail; the editor sample is approximate, while browser Use reviews the full prepared result. Save stores the recipe only; Cancel writes nothing. Existing shared-image cleanup and source validation still apply.
+
 ### Readability
 
-New resolutions use `kmeans-v4`: automatic foreground, all 16 ANSI text colors and cursor target at least 4.5:1 against the brightest modeled background. Analysis checks every source pixel, including image alpha, in linear-light sRGB. The solid background is also included, so the bound covers cropping, fit, position, repeat and uncovered areas without assuming window dimensions. This is conservative: cropped-out highlights can still lighten automatic colors. Selection text is checked against its solid selection background, not the wallpaper.
+New guided/imported Profiles and explicitly resetting ALL colors to Automatic use **`oklch-v2`**, stored as `algorithm = "oklch-v2"` in `[colors]`. It builds tinted neutrals and distinct ANSI semantic hues, adjusts OKLCH lightness at fixed hue, reduces chroma for sRGB gamut, and checks quantized RGB. Initial automatic darkening chooses a conservative minimum whole percentage; its numeric value is visible and adjustable. **Auto darkening** recalculates it after an opacity change; manual adjustments are not silently overwritten. Manual color overrides remain outside this automatic contract. No APCA implementation or certification is claimed; arbitrary application truecolor, dim text and Fish configuration are not controlled.
+
+Profiles without an explicit palette algorithm retain `kmeans-v4`: automatic foreground, all 16 ANSI text colors and cursor target at least 4.5:1 against the brightest modeled background. Analysis checks every source pixel, including image alpha, in linear-light sRGB. The solid background is also included, so the bound covers cropping, fit, position, repeat and uncovered areas without assuming window dimensions. This is conservative: cropped-out highlights can still lighten automatic colors. Selection text is checked against its solid selection background, not the wallpaper.
 
 Changing image or opacity recalculates automatic text colors. Image analysis is reused while adjusting opacity in the editor. Customized slots, including background and selection, are preserved; their choices can invalidate automatic contrast bounds. Named themes and explicit palettes are not recolored.
 
-At high image opacity, even white text may not reach 4.5:1. The sample warns about low contrast and recommends reducing image opacity; the tool does not silently change it. Browser details (`v`) report estimated minimum contrast across thumbnail regions, including ANSI, cursor and selection. This estimate can detect problems, not certify every source pixel or terminal application. Dim/faint text, application-specific colors and cursor text are not certified.
+At high image opacity, even white text may not reach 4.5:1. For `oklch-v1`/`oklch-v2`, Plan reports `palette_contrast.status` (`feasible` or `infeasible`) for the **automatic light-on-dark whole-source bound**, with target 4.5 and manual overrides explicitly unchecked. Infeasibility also produces diagnostic `colors.contrast-infeasible`, a persistent browser/editor warning independent of thumbnail sampling, and an Apply warning. This is not a proof that every alternative polarity or viewport is impossible. `oklch-v2` keeps its original distinct roles as a **non-conforming fallback**; it does not claim to solve contrast. `oklch-v1` preserves its historical white fallback byte-for-byte, but now reports infeasibility too. Reduce opacity or adjust darkening explicitly; no hidden effect change, automatic migration or lowered contrast target occurs. Browser details (`v`) report estimated minimum contrast across thumbnail regions, including ANSI, cursor and selection. This estimate can detect problems, not certify every source pixel or terminal application. Dim/faint text, application-specific colors and cursor text are not certified.
 
-Omitted image opacity is unknown: automatic colors retain the flat-background correction, while the sample illustrates opacity 1.0. Neither is a discovered Ghostty setting; set opacity explicitly to enable composition-aware correction. Native blending, Display P3, desktop transparency, external overrides and unmanaged settings can differ from this model. No universal accessibility guarantee is made. Saved Profiles are not migrated; applying one again resolves automatic colors with v4. History stores resolved colors and keeps replaying its original result, including v1–v3 provenance. Older binaries may not read new v4 Activations: back up the Managed Root before downgrading.
+Omitted image opacity is unknown: automatic colors retain the flat-background correction, while the sample illustrates opacity 1.0. Neither is a discovered Ghostty setting; set opacity explicitly to enable composition-aware correction. Native blending, Display P3, desktop transparency, external overrides and unmanaged settings can differ from this model. No universal accessibility guarantee is made. Saved Profiles are not migrated; applying a Profile without an explicit algorithm still resolves with v4. History stores resolved colors and transformed image bytes and keeps replaying its original result, including kmeans v1–v4 and `oklch-v1` provenance. Saving/reopening/replacing an existing Profile retains its algorithm; only explicitly confirmed Reset ALL colors opts into `oklch-v2`. Older binaries reject the new palette/effect identifiers: back up the Managed Root before downgrading.
 
 ### Advanced files and compatibility
 
@@ -109,6 +125,10 @@ ghostty-wall
 
 Moving the selection previews without applying. **Choose Use to apply.**
 
+At 90 columns and above, compact Profile navigation leaves most of the browser for the preview. At 100 columns and 18 rows, Edit shows a dominant sample on the left and contextual controls on the right, with the current Wallpaper / Colors / Terminal group highlighted. The action footer stays separate from the preview. Narrow Edit layouts label the current Controls / Preview view; `p` switches between them instead of compressing both into columns. In Ghostty, Edit reuses the browser's image compositor and Kitty renderer with a reduced source (at most 384×256). Blur/darkening and image composition run on a latest-only preview worker; obsolete results cannot replace the current draft preview. Loading, failed previews and unsupported graphics are explicitly labelled as cell fallback. The source remains unchanged, and the internal sample is not a pixel-exact or live Ghostty view. Control labels wrap at word boundaries; the selected control position and Home/End hints make scrolling discoverable. Editor details (`v`) remain available before the first Preview: they explain how to open it and show known automatic contrast infeasibility without inventing a sampled contrast estimate.
+
+Screen transitions group clearing and redrawing with synchronized output where supported, preventing presentation of an intermediate cleared screen. Preview image preparation/transmission remains asynchronous; this does not certify compositor latency or change Save/Use authority. Browser/editor chrome uses fixed dark RGB colors, not the host ANSI palette or draft colors. Editor headings and action shortcuts use a brighter bold accent; inactive tabs, navigation hints and separators use a secondary RGB color without terminal dimming. Results/errors retain normal text contrast. Focus keeps both its highlighted row and `>` marker. The sample still shows the resolved Profile colors, including any low-contrast warning. Window opacity, host wallpaper, padding, shaders and desktop compositing remain terminal-owned. Ghostty's `background-opacity-cells = true` applies window opacity even to explicit RGB cell backgrounds; the TUI cannot promise opaque panels under that setting and does not change it. Isolating HOME/XDG for the app isolates its data, not the configuration of an already-open Ghostty window. No Fish or personal terminal configuration change is required by the app.
+
 | Key | Action |
 | --- | --- |
 | ↑ / ↓ or `j` / `k` | Select and preview |
@@ -118,7 +138,7 @@ Moving the selection previews without applying. **Choose Use to apply.**
 | Enter or `p` | Enlarge/restore the compact sample |
 | `?` | More actions |
 | `v` | Results, errors and limitations |
-| `i` | View the original image |
+| `i` | View the resolved image |
 | `q` | Quit |
 
 ### What the preview can—and cannot—show

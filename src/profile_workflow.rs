@@ -23,6 +23,7 @@ use crate::{
     runtime::ReloadOutcome,
 };
 
+mod composition;
 mod delete;
 
 /// Initial wallpaper opacity for new Profiles only; never a decoding or resolution fallback.
@@ -237,7 +238,8 @@ impl ProfileDraft {
     pub fn staged_image(&self) -> Option<&[u8]> {
         self.image.as_ref().map(|(bytes, _)| bytes.as_slice())
     }
-    /// Complete readable generated colors for the staged image, before any file is saved.
+    /// Generated colors for the staged image, possibly a non-conforming fallback.
+    /// Full resolution reports automatic contrast feasibility before Use.
     pub fn generated_colors(&self) -> Result<ColorsManifest, WorkflowError> {
         let (bytes, _) = self
             .image
@@ -250,8 +252,19 @@ impl ProfileDraft {
             }
             _ => 0,
         };
-        crate::palette::generate_kmeans_v4(bytes, opacity)
-            .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))
+        if let Some(algorithm @ ("oklch-v1" | "oklch-v2")) = profile.palette_algorithm {
+            let darken = match profile.wallpaper {
+                Some(WallpaperIntent::Source {
+                    effects: Some(e), ..
+                }) => e.darken,
+                _ => 0,
+            };
+            crate::palette::analyze_oklch(bytes)
+                .map(|p| p.resolve(opacity, darken, algorithm).colors)
+        } else {
+            crate::palette::generate_kmeans_v4(bytes, opacity)
+        }
+        .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))
     }
     /// Replaces draft Intent after strict validation. No disk write occurs.
     pub fn set_document(
@@ -285,6 +298,8 @@ pub enum ProfileOutcome {
         activation: crate::domain::ActivationId,
         /// Best-effort reload result, not proof of visible Ghostty change.
         reload: ReloadOutcome,
+        /// Fresh full resolution used a non-conforming automatic palette fallback.
+        contrast_infeasible: bool,
     },
 }
 
@@ -367,23 +382,15 @@ impl ProfileWorkflows {
         let (bytes, extension) = image_bytes(path)?;
         self.stage_image(draft, bytes, extension, None)
     }
-    /// Stages a stable, one-time gradient-v1 PNG with versioned provenance.
+    /// Stages a stable, one-time composition-v1 PNG with versioned provenance.
     pub fn generate_image(
         &self,
         draft: &mut ProfileDraft,
         seed: Sha256Digest,
     ) -> Result<(), WorkflowError> {
-        let raw = seed.as_bytes();
-        let image = image::RgbaImage::from_fn(256, 256, |x, y| {
-            image::Rgba([
-                raw[0].wrapping_add((255 * x / 255) as u8),
-                raw[1].wrapping_add((255 * y / 255) as u8),
-                raw[2].wrapping_add((255 * (x + y) / 510) as u8),
-                255,
-            ])
-        });
+        let image = composition::render(seed);
         let mut buffer = io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(image)
+        image::DynamicImage::ImageRgb8(image)
             .write_to(&mut buffer, image::ImageFormat::Png)
             .map_err(|_| WorkflowError::Invalid("cannot encode generated image"))?;
         self.stage_image(draft, buffer.into_inner(), "png", Some(seed))
@@ -399,7 +406,7 @@ impl ProfileWorkflows {
         crate::palette::generate_kmeans_v3(&bytes)
             .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))?;
         let digest = Sha256Digest::from_bytes(Sha256::digest(&bytes).into());
-        let generation = seed.map(|seed| format!("\n[wallpaper.generation]\nalgorithm = \"gradient-v1\"\nseed = \"{seed}\"\nwidth = 256\nheight = 256\n")).unwrap_or_default();
+        let generation = seed.map(|seed| format!("\n[wallpaper.generation]\nalgorithm = \"composition-v1\"\nseed = \"{seed}\"\nwidth = {}\nheight = {}\n", composition::WIDTH, composition::HEIGHT)).unwrap_or_default();
         // Replacing an image in an edit must not overwrite the old owned candidate.
         let basename = if draft.original.is_some() {
             format!("{}-{}.{extension}", draft.id, &digest.to_string()[..16])
@@ -428,7 +435,7 @@ impl ProfileWorkflows {
                 new.remove("colors");
             }
             if let Some(wallpaper) = previous.get("wallpaper") {
-                for key in ["fit", "position", "opacity", "repeat"] {
+                for key in ["fit", "position", "opacity", "repeat", "effects"] {
                     if let Some(value) = wallpaper.get(key) {
                         new["wallpaper"][key] = value.clone();
                     } else {
@@ -443,6 +450,21 @@ impl ProfileWorkflows {
         }
         if let Some(terminal) = previous.get("terminal") {
             new["terminal"] = terminal.clone();
+        }
+        if draft.original.is_none() {
+            new["colors"]["algorithm"] = toml_edit::value("oklch-v2");
+            let profile = crate::codec::intent::parse_profile_toml(&new.to_string())?;
+            let opacity = match profile.wallpaper {
+                Some(WallpaperIntent::Source { opacity, .. }) => opacity.map_or(0, |v| v.get()),
+                _ => 0,
+            };
+            let palette = crate::palette::analyze_oklch(&bytes)
+                .map_err(|_| WorkflowError::Invalid("image cannot generate readable colors"))?;
+            new["wallpaper"]["effects"] = toml_edit::Item::Table(toml_edit::Table::new());
+            new["wallpaper"]["effects"]["algorithm"] = toml_edit::value("image-effects-v1");
+            new["wallpaper"]["effects"]["blur"] = toml_edit::value(0);
+            new["wallpaper"]["effects"]["darken"] =
+                toml_edit::value(i64::from(palette.minimum_darkening(opacity)));
         }
         let document = new.to_string();
         parse_named_profile_toml(draft.id.as_str(), &self.config, &document)?;
@@ -548,6 +570,7 @@ impl ProfileWorkflows {
         Ok(ProfileOutcome::SavedAndApplied {
             activation: outcome.activation_id(),
             reload: outcome.reload_outcome(),
+            contrast_infeasible: outcome.contrast_infeasible(),
         })
     }
     /// Low-level inactive-only deletion for callers that already obtained consent.

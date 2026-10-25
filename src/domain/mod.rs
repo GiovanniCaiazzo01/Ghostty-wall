@@ -20,5 +20,6 @@ pub use error::ValidationError;
 pub use ids::{EnvironmentId, Sha256Digest};
 pub use intent::{
     ColorOverrides, ColorsIntent, ConfigIntent, GenerationRecipe, IntentId, OwnedImage,
-    ProfileIntent, SourceIntent, SourcePath, TerminalIntent, WallpaperIntent, WallpaperSelection,
+    ProfileIntent, SourceIntent, SourcePath, TerminalIntent, WallpaperEffects, WallpaperIntent,
+    WallpaperSelection,
 };

@@ -157,6 +157,20 @@ pub fn parse_profile_toml(input: &str) -> Result<ProfileIntent, IntentTomlError>
             "generated colors require source wallpaper",
         ));
     }
+    let palette_algorithm = root
+        .get("colors")
+        .and_then(Value::as_table)
+        .map(|colors| opt_string(colors, "algorithm"))
+        .transpose()?
+        .flatten()
+        .map(|algorithm| match (schema_version, algorithm) {
+            (2, "oklch-v1") => Ok("oklch-v1"),
+            (2, "oklch-v2") => Ok("oklch-v2"),
+            _ => Err(IntentTomlError::Invariant(
+                "generated palette algorithm requires schema 2 and oklch-v1 or oklch-v2",
+            )),
+        })
+        .transpose()?;
     let terminal = root
         .get("terminal")
         .map(|value| parse_terminal(value, &lexical))
@@ -165,6 +179,7 @@ pub fn parse_profile_toml(input: &str) -> Result<ProfileIntent, IntentTomlError>
         schema_version,
         wallpaper,
         colors,
+        palette_algorithm,
         terminal,
     })
 }
@@ -194,6 +209,7 @@ fn parse_wallpaper(
                     "repeat",
                     "owned_sha256",
                     "generation",
+                    "effects",
                 ],
             )?;
             if schema_version == 1
@@ -203,6 +219,36 @@ fn parse_wallpaper(
                     "owned images require Profile schema 2",
                 ));
             }
+            let effects = table
+                .get("effects")
+                .map(|value| {
+                    if schema_version != 2 {
+                        return Err(IntentTomlError::Invariant(
+                            "wallpaper effects require Profile schema 2",
+                        ));
+                    }
+                    let effect = value
+                        .as_table()
+                        .ok_or(IntentTomlError::Type("wallpaper.effects"))?;
+                    allow(effect, &["algorithm", "blur", "darken"])?;
+                    if string(effect, "algorithm")? != "image-effects-v1" {
+                        return Err(IntentTomlError::Invariant(
+                            "unsupported wallpaper effects algorithm",
+                        ));
+                    }
+                    let blur = opt_integer(effect, "blur")?.unwrap_or(0);
+                    let darken = opt_integer(effect, "darken")?.unwrap_or(0);
+                    if !(0..=32).contains(&blur) || !(0..=100).contains(&darken) {
+                        return Err(IntentTomlError::Invariant(
+                            "image blur must be 0..=32; darkening must be 0..=100",
+                        ));
+                    }
+                    Ok(crate::domain::WallpaperEffects {
+                        blur: blur as u8,
+                        darken: darken as u8,
+                    })
+                })
+                .transpose()?;
             let owned_image = opt_string(table, "owned_sha256")?
                 .map(|digest| {
                     let sha256 = digest.parse::<Sha256Digest>()?;
@@ -213,12 +259,16 @@ fn parse_wallpaper(
                                 .as_table()
                                 .ok_or(IntentTomlError::Type("generation"))?;
                             allow(recipe, &["algorithm", "seed", "width", "height"])?;
-                            if string(recipe, "algorithm")? != "gradient-v1" {
-                                return Err(IntentTomlError::Mode {
-                                    field: "generation.algorithm",
-                                    value: string(recipe, "algorithm")?.to_owned(),
-                                });
-                            }
+                            let algorithm = match string(recipe, "algorithm")? {
+                                "gradient-v1" => "gradient-v1",
+                                "composition-v1" => "composition-v1",
+                                other => {
+                                    return Err(IntentTomlError::Mode {
+                                        field: "generation.algorithm",
+                                        value: other.to_owned(),
+                                    });
+                                }
+                            };
                             let width = opt_integer(recipe, "width")?
                                 .ok_or(IntentTomlError::Missing("generation.width"))?;
                             let height = opt_integer(recipe, "height")?
@@ -229,6 +279,7 @@ fn parse_wallpaper(
                                 ));
                             }
                             Ok(GenerationRecipe {
+                                algorithm,
                                 seed: string(recipe, "seed")?.parse()?,
                                 width: width as u32,
                                 height: height as u32,
@@ -280,6 +331,7 @@ fn parse_wallpaper(
                     .map(OpacityMillionths::new)
                     .transpose()?,
                 repeat: opt_bool(table, "repeat")?,
+                effects,
                 owned_image,
             })
         }
@@ -294,7 +346,7 @@ fn parse_colors(value: &Value, schema_version: u8) -> Result<ColorsIntent, Inten
     let table = value.as_table().ok_or(IntentTomlError::Type("colors"))?;
     match string(table, "mode")? {
         "generated" => {
-            allow(table, &["mode", "overrides"])?;
+            allow(table, &["mode", "overrides", "algorithm"])?;
             if let Some(value) = table.get("overrides") {
                 if schema_version == 1 {
                     return Err(IntentTomlError::Invariant(

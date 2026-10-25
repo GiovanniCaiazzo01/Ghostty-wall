@@ -163,7 +163,9 @@ class EditPublicPath(EditFixture):
         self.cli("create", "reference", input=f"i\npath:{self.original}\ns\nn\n")
         # Composition-aware colors require the same opacity as the edited Profile.
         reference_profile = self.root / "profiles/reference.toml"
-        reference_profile.write_text(re.sub(r"(?m)^opacity = [0-9.]+$", "opacity = 0.234567", reference_profile.read_text()))
+        # The edited legacy Profile retains kmeans-v4; new Create defaults to oklch-v2.
+        reference_profile.write_text(re.sub(r"(?m)^opacity = [0-9.]+$", "opacity = 0.234567",
+                                            reference_profile.read_text().replace('algorithm = "oklch-v2"\n', '')))
         reference = self.plan("reference")["environment"]["manifest"]["colors"]
         before = self.snapshot()
         session = self.open()

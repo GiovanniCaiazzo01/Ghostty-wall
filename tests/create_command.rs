@@ -126,7 +126,7 @@ fn assert_readable(plan: &Value) {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     };
     let colors = &plan["environment"]["manifest"]["colors"];
-    assert_eq!(plan["color_resolution"]["algorithm"], "kmeans-v4");
+    assert_eq!(plan["color_resolution"]["algorithm"], "oklch-v2");
     assert_eq!(
         plan["environment"]["manifest"]["wallpaper"]["mode"],
         "image"
@@ -360,7 +360,7 @@ fn generated_wallpaper_changes_only_on_explicit_another_before_save_and_remains_
     assert_eq!(wallpaper["selection"].as_str(), Some("path"));
     assert_eq!(
         wallpaper["generation"]["algorithm"].as_str(),
-        Some("gradient-v1")
+        Some("composition-v1")
     );
     assert_eq!(wallpaper["generation"]["seed"].as_str(), Some(seeds[1]));
     let image_path = s.root().join("profiles/generated.png");
@@ -368,19 +368,12 @@ fn generated_wallpaper_changes_only_on_explicit_another_before_save_and_remains_
     let digest = Sha256Digest::from_bytes(Sha256::digest(&bytes).into()).to_string();
     assert_eq!(wallpaper["owned_sha256"].as_str(), Some(digest.as_str()));
     let image = image::load_from_memory(&bytes).unwrap().to_rgba8();
-    assert_eq!(image.dimensions(), (256, 256));
+    assert_eq!(image.dimensions(), (768, 512));
     let seed: Sha256Digest = seeds[1].parse().unwrap();
-    for (x, y) in [(0, 0), (23, 69), (255, 255)] {
-        assert_eq!(
-            image.get_pixel(x, y).0,
-            [
-                seed.as_bytes()[0].wrapping_add(x as u8),
-                seed.as_bytes()[1].wrapping_add(y as u8),
-                seed.as_bytes()[2].wrapping_add(((x + y) / 2) as u8),
-                255,
-            ]
-        );
-    }
+    let workflow = ghostty_wall::profile_workflow::ProfileWorkflows::load(s.paths.clone()).unwrap();
+    let mut repeated = workflow.create("repeat").unwrap();
+    workflow.generate_image(&mut repeated, seed).unwrap();
+    assert_eq!(repeated.staged_image().unwrap(), bytes);
     let first = s.plan("generated");
     assert_readable(&first);
     success(s.run(&["apply", "generated"], ""));
@@ -485,7 +478,8 @@ fn image_picker_uses_localized_roots_navigation_search_filtering_and_decode_vali
         original_bytes
     );
     let plan = s.plan("personal");
-    assert_eq!(plan["asset"]["media_type"], "image/jpeg");
+    assert_eq!(plan["asset"]["media_type"], "image/png");
+    assert_eq!(plan["image_effects"]["source_media_type"], "image/jpeg");
     assert_readable(&plan);
 }
 

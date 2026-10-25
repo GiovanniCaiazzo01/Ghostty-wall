@@ -223,7 +223,7 @@ pub(super) fn image(
             painted_size = None;
             screen.redraw()?;
         }
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::resize_notice(frame) {
                 return;
             }
@@ -288,7 +288,7 @@ pub(super) fn image(
 pub(super) fn fresh_start(output: &mut impl Write) -> Result<bool, CliError> {
     let mut screen = editor::Screen::open(output)?;
     loop {
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::resize_notice(frame) { return; }
             frame.render_widget(Block::default().style(Style::default().fg(Color::White).bg(Color::Black)), frame.area());
             frame.render_widget(Paragraph::new("Ghostty Wall · Not initialized\n\ni Initialize integration (confirmation)\ny Preview initialization (dry-run)\nq / Esc / Ctrl-C quit\n\nInitialization creates managed files and the Ghostty integration hook. It does not activate a Profile.").wrap(Wrap { trim: false }), frame.area());
@@ -495,7 +495,7 @@ pub(super) fn job(
                 }
             })
             .collect();
-        screen.terminal.draw(|frame| {
+        screen.draw(|frame| {
             if tui::needs_resize(frame.area().width, frame.area().height) {
                 let message = if !read_only && done.is_none() {
                     "Resize to 40x12.\nOperation running; cancellation unavailable. Wait for completion."
