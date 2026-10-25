@@ -6,6 +6,31 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
+## [1.4.0] - Unreleased
+
+### Added
+
+- Varied, seed-repeatable `composition-v1` wallpapers, saved until explicit regeneration.
+- Reversible `image-effects-v1` wallpaper blur and adjustable linear-light darkening.
+- Role-aware `oklch-v2` palettes with explicit contrast-infeasibility diagnostics.
+
+### Changed
+
+- Responsive browsing/editing with bounded asynchronous previews and authoritative Use validation.
+- Preview-led wide/compact TUI, contextual controls, visible focus and explicit graphics fallback.
+- Updated CLI help, user guides, website and release notes.
+
+### Fixed
+
+- Synchronized clear/redraw where supported; RGB chrome independent of terminal ANSI colors.
+- Editor details explain missing samples and known contrast infeasibility before Preview opens.
+
+### Compatibility and limitations
+
+- No migration: existing Profiles, overrides, Sources, captured Environments and History stay intact. `gradient-v1`, `oklch-v1` output and Save / Save and use / Cancel semantics are preserved. New guided/imported Profiles and confirmed Reset ALL colors use v2.
+- Infeasible v2 is a **non-conforming fallback**, not valid 4.5:1. No universal accessibility or timing guarantee; [known timing outliers](https://github.com/GiovanniCaiazzo01/Ghostty-wall/issues/19) remain disclosed.
+- Back up Managed Root before downgrading: older binaries reject new effect/palette identifiers. [Effects and compatibility](docs/advanced-usage.md#reversible-image-blur-and-darkening).
+
 ## [1.3.0] - 2026-10-23
 
 ### Added

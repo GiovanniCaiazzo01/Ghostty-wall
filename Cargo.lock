@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "ghostty-wall"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "crossterm",
  "flate2",
