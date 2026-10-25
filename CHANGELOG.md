@@ -6,7 +6,7 @@ The format is based on Keep a Changelog, adapted to the current size of this rep
 
 ## [Unreleased]
 
-## [1.4.0] - Unreleased
+## [1.4.0] - 2026-10-25
 
 ### Added
 
